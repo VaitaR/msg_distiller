@@ -60,6 +60,13 @@ services:
     networks:
       - slack_network
 
+  telegram-worker:
+    <<: *worker-base
+    container_name: slack_telegram_worker
+    command: python scripts/run_multi_source_pipeline.py --source telegram --interval-seconds 600
+    networks:
+      - slack_network
+
   ingest-worker:
     <<: *worker-base
     container_name: slack_ingest_worker
