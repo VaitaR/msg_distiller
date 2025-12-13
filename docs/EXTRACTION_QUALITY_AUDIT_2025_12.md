@@ -132,7 +132,7 @@ if event.status == EventStatus.COMPLETED:
 
 # ВАРИАНТ B: Изменить промпт (более строгий контракт)
 # В slack.yaml добавить:
-# "CRITICAL: If status='completed', you MUST provide actual_end. 
+# "CRITICAL: If status='completed', you MUST provide actual_end.
 #  If you don't know the exact time, use message timestamp."
 ```
 
@@ -381,13 +381,13 @@ if event.status == EventStatus.COMPLETED:
 
 ```python
 def truncate_or_chunk(
-    text: str, 
-    char_budget: int, 
+    text: str,
+    char_budget: int,
     overlap: int = 200
 ) -> list[str]:
     if len(text) <= char_budget:
         return [text]
-    
+
     chunks = []
     start = 0
     while start < len(text):
@@ -417,7 +417,7 @@ EVENTS_EXTRACTED_TOTAL = Counter(
 )
 
 EVENTS_BLOCKED_TOTAL = Counter(
-    "events_blocked_total", 
+    "events_blocked_total",
     "Events blocked by validation",
     ["source", "channel", "reason"]
 )
@@ -488,9 +488,9 @@ tests/
 def test_extraction_fixture(fixture_name, mock_llm):
     message = load_fixture(f"extraction/slack/{fixture_name}.json")
     expected = load_fixture(f"expected/{fixture_name}_events.json")
-    
+
     result = extract_events_use_case(...)
-    
+
     # Проверяем инварианты:
     assert result.events_extracted >= expected["min_events"]
     assert all(e.category in expected["allowed_categories"] for e in result.events)
@@ -539,16 +539,16 @@ prompts:
 
 ```python
 def get_cached_llm_response_semantic(
-    self, 
-    text: str, 
+    self,
+    text: str,
     similarity_threshold: float = 0.95
 ) -> LLMResponse | None:
     # 1. Embed text
     embedding = self.embedding_model.encode(text)
-    
+
     # 2. Search similar in cache
     similar = self.vector_store.search(embedding, threshold=similarity_threshold)
-    
+
     if similar:
         return similar.response
     return None

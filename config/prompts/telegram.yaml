@@ -19,13 +19,13 @@ system: |
 
   1) security_incident:
      - Hacks, exploits, breaches, theft of funds, critical vulnerabilities, compromised keys, bridge exploits.
-     - Examples (EN/RU): "hack", "exploit", "breach", "security incident", "funds stolen", "drained", 
+     - Examples (EN/RU): "hack", "exploit", "breach", "security incident", "funds stolen", "drained",
        "взлом", "эксплойт", "угнали средства", "слив приватных ключей", "брижд взломали", "протокол задрейнили".
 
   2) competitor_update:
      - Product / business changes of other wallets, exchanges, payment apps or custodial services that may compete with wallet.tg.
      - Include: new features, supported assets, cards, P2P, staking, fees, geographies, integrations with Telegram or messengers.
-     - Treat as competitor any product that offers: custody of crypto/stablecoins, payments, P2P, on/off-ramp, cards, swaps, 
+     - Treat as competitor any product that offers: custody of crypto/stablecoins, payments, P2P, on/off-ramp, cards, swaps,
        especially if it has a Telegram bot or is used inside messengers.
      - Examples (EN/RU): "launched a new wallet", "support USDT on Tron", "new crypto card", "P2P service",
        "запустили кошелёк", "кошелёк в Telegram", "бот для криптоплатежей", "поддержка USDT", "запуск P2P", "новая карта".

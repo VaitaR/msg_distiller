@@ -14,7 +14,7 @@ conflicts on the host.
 - Endpoint: `http://<host>:9000/metrics`
 - Default bind address: `0.0.0.0`
 - Dedicated container: `metrics-exporter`
-- Disable auto-start (e.g., for tests or ad-hoc scripts): set `METRICS_EXPORTER_AUTO_START=0`
+- Auto-start is disabled by default; set `METRICS_EXPORTER_AUTO_START=1` to enable it
 - Override port: set `METRICS_PORT=<port>`
 
 Verify that metrics are reachable from the host:
@@ -26,8 +26,8 @@ curl -sf http://localhost:9000/metrics | head
 If the command above succeeds you should see Prometheus samples such as
 `pipeline_jobs_submitted_total` and `pipeline_stage_duration_seconds`.
 
-Need to expose metrics from a one-off script? Export `METRICS_EXPORTER_AUTO_START=0`, import
-`ensure_metrics_exporter()`, and call it explicitly. Alternatively, run `python -m
+Need to expose metrics from a one-off script? Import `ensure_metrics_exporter()` and call it
+explicitly. Alternatively, run `python -m
 src.observability.metrics` to launch the HTTP server and keep the process alive until it receives a
 shutdown signal.
 

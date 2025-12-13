@@ -15,6 +15,15 @@ install: ## Install dependencies
 	@echo "$(BLUE)Installing dependencies...$(NC)"
 	pip install -r requirements.txt
 
+deps-check: ## Check dependency resolution (uv dry-run, matches CI)
+	@echo "$(BLUE)Checking dependency resolution with uv...$(NC)"
+	@if command -v uv >/dev/null 2>&1; then \
+		uv pip install --dry-run --python "$$(which python)" -r requirements-dev.txt >/dev/null && \
+		echo "$(GREEN)✓ Dependency resolution OK$(NC)"; \
+	else \
+		echo "$(YELLOW)WARN: uv not found; skipping deps-check (CI uses uv)$(NC)"; \
+	fi
+
 format: ## Format code with ruff
 	@echo "$(BLUE)Formatting code with ruff...$(NC)"
 	ruff format .
@@ -101,16 +110,22 @@ ci-local: ## Run CI checks locally (same as GitHub Actions)
 	@echo "$(BLUE)   Running CI Pipeline (Local)$(NC)"
 	@echo "$(BLUE)===========================================$(NC)"
 	@echo ""
-	@echo "$(YELLOW)Step 1/4: Format Check$(NC)"
+	@echo "$(YELLOW)Step 0/6: Dependency Resolution$(NC)"
+	@make deps-check
+	@echo ""
+	@echo "$(YELLOW)Step 1/6: Pre-commit (auto-fix)$(NC)"
+	@make pre-commit
+	@echo ""
+	@echo "$(YELLOW)Step 2/6: Format Check$(NC)"
 	@make format-check
 	@echo ""
-	@echo "$(YELLOW)Step 2/4: Lint$(NC)"
+	@echo "$(YELLOW)Step 3/6: Lint$(NC)"
 	@make lint
 	@echo ""
-	@echo "$(YELLOW)Step 3/4: Type Check$(NC)"
+	@echo "$(YELLOW)Step 4/6: Type Check$(NC)"
 	@make typecheck
 	@echo ""
-	@echo "$(YELLOW)Step 4/4: Tests$(NC)"
+	@echo "$(YELLOW)Step 5/6: Tests$(NC)"
 	@make test
 	@echo ""
 	@echo "$(GREEN)===========================================$(NC)"

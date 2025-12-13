@@ -141,7 +141,10 @@ METRICS_EXPORTER_AUTO_START_ENV: Final[str] = "METRICS_EXPORTER_AUTO_START"
 def _should_autostart() -> bool:
     """Return True when the metrics exporter should auto-start."""
 
-    raw_value = os.getenv(METRICS_EXPORTER_AUTO_START_ENV, "1")
+    # Default to disabled to avoid binding host ports during tests/import-time usage.
+    # Dedicated runtime entrypoints (e.g. `python -m src.observability.metrics`) call
+    # `ensure_metrics_exporter()` explicitly.
+    raw_value = os.getenv(METRICS_EXPORTER_AUTO_START_ENV, "0")
     normalized = raw_value.strip().lower()
     return normalized in {"1", "true", "yes", "on"}
 
@@ -206,7 +209,14 @@ __all__ = [
 
 
 if _should_autostart():
-    ensure_metrics_exporter()
+    try:
+        ensure_metrics_exporter()
+    except OSError as exc:  # pragma: no cover - import-time best-effort
+        logger.warning(
+            "metrics_exporter_autostart_failed",
+            port=_resolve_metrics_port(),
+            error=str(exc),
+        )
 
 
 if __name__ == "__main__":

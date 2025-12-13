@@ -47,6 +47,7 @@ repos:
     hooks:
       - id: trailing-whitespace
         name: Remove trailing whitespace
+        args: ["--markdown-linebreak-ext=md"]
       - id: end-of-file-fixer
         name: Add missing end-of-file
         exclude: ^(alembic/versions/.*\.py)$
