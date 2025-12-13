@@ -49,6 +49,7 @@ def _create_event_values(index: int) -> tuple[object, ...]:
     event_id = str(uuid4())
     message_id = f"msg-{index}"
     source_channels = "[]"
+    message_published_at = now
     source_id = "slack"
     action = "update"
     object_id = f"OBJ-{index}"
@@ -77,6 +78,7 @@ def _create_event_values(index: int) -> tuple[object, ...]:
         message_id,
         source_channels,
         now,
+        message_published_at,
         source_id,
         action,
         object_id,
@@ -127,16 +129,17 @@ def test_bulk_upsert_statement_counts(record_count: int) -> None:
     conn = sqlite3.connect(":memory:", factory=CountingConnection)
     conn.execute(
         """
-        CREATE TABLE events (
-            event_id TEXT PRIMARY KEY,
-            message_id TEXT,
-            source_channels TEXT,
-            extracted_at TEXT,
-            source_id TEXT,
-            action TEXT,
-            object_id TEXT,
-            object_name_raw TEXT,
-            qualifiers TEXT,
+            CREATE TABLE events (
+                event_id TEXT PRIMARY KEY,
+                message_id TEXT,
+                source_channels TEXT,
+                extracted_at TEXT,
+                message_published_at TEXT,
+                source_id TEXT,
+                action TEXT,
+                object_id TEXT,
+                object_name_raw TEXT,
+                qualifiers TEXT,
             stroke TEXT,
             anchor TEXT,
             category TEXT,

@@ -50,7 +50,7 @@ class MessageSourceConfig(BaseModel):
         default_factory=dict,
         description="Per-source LLM settings (temperature, timeout)",
     )
-    channels: list[str] | list[Any] = Field(
+    channels: list[Any] = Field(
         default_factory=list,
         description="List of channel IDs (str) or channel config objects",
     )

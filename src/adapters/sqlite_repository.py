@@ -267,9 +267,7 @@ class SQLiteRepository:
         )
 
         try:
-            cursor.execute(
-                "ALTER TABLE events ADD COLUMN message_published_at TEXT"
-            )
+            cursor.execute("ALTER TABLE events ADD COLUMN message_published_at TEXT")
         except sqlite3.OperationalError as exc:
             if "duplicate column name" not in str(exc).lower():
                 raise
