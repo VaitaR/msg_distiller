@@ -160,6 +160,7 @@ class LLMClient:
         """
         self.client = OpenAI(api_key=api_key, timeout=timeout)
         self.model = model
+        self.timeout_seconds = timeout
         self._verbose_requested = verbose
         self.verbose = verbose and self._is_verbose_allowed()
 
@@ -238,6 +239,7 @@ class LLMClient:
         channel_name: str = "",
         *,
         chunk_index: int | None = None,
+        context: dict[str, Any] | None = None,
     ) -> LLMResponse:
         """Extract events from message text using LLM.
 
@@ -281,7 +283,13 @@ class LLMClient:
             effective_text = truncated_text
 
         # Build prompt
-        prompt = self._build_prompt(effective_text, links, message_ts_dt, channel_name)
+        prompt = self._build_prompt(
+            effective_text,
+            links,
+            message_ts_dt,
+            channel_name,
+            context=context,
+        )
 
         # Log request details
         logger.info(
@@ -457,6 +465,7 @@ class LLMClient:
         max_retries: int = 3,
         *,
         chunk_index: int | None = None,
+        context: dict[str, Any] | None = None,
     ) -> LLMResponse:
         """Extract events with retry on failures (timeout, rate limit, validation).
 
@@ -485,6 +494,7 @@ class LLMClient:
                     message_ts_dt,
                     channel_name,
                     chunk_index=chunk_index,
+                    context=context,
                 )
             except (ValidationError, LLMAPIError) as e:
                 last_error = e
@@ -550,7 +560,13 @@ class LLMClient:
         return self._last_call_metadata
 
     def _build_prompt(
-        self, text: str, links: list[str], message_ts_dt: datetime, channel_name: str
+        self,
+        text: str,
+        links: list[str],
+        message_ts_dt: datetime,
+        channel_name: str,
+        *,
+        context: dict[str, Any] | None = None,
     ) -> str:
         """Build user prompt for LLM.
 
@@ -565,11 +581,21 @@ class LLMClient:
         """
         ts_str = message_ts_dt.strftime("%Y-%m-%d %H:%M UTC")
 
-        prompt_parts = [
-            f"Channel: #{channel_name}" if channel_name else "",
-            f"Message timestamp: {ts_str}",
-            f"\nMessage text:\n{text}",
-        ]
+        prompt_parts: list[str] = []
+
+        if context:
+            serialized_context = json.dumps(
+                context, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            )
+            prompt_parts.append("Message metadata (JSON):\n" + serialized_context)
+
+        prompt_parts.extend(
+            [
+                f"Channel: #{channel_name}" if channel_name else "",
+                f"Message timestamp: {ts_str}",
+                f"\nMessage text:\n{text}",
+            ]
+        )
 
         if links:
             prompt_parts.append(

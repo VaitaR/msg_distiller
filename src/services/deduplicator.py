@@ -51,8 +51,10 @@ def generate_cluster_key(event: Event) -> str:
     # Top anchor (first one if available, else empty)
     top_anchor = event.anchors[0] if event.anchors else ""
 
-    # Concatenate: action + object + anchor
-    key_material = f"{event.action.value}||{object_key}||{top_anchor}"
+    # Concatenate: source + action + object + anchor
+    key_material = (
+        f"{event.source_id.value}||{event.action.value}||{object_key}||{top_anchor}"
+    )
     return hashlib.sha1(key_material.encode("utf-8")).hexdigest()
 
 

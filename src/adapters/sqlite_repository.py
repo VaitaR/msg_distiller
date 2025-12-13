@@ -1028,6 +1028,69 @@ class SQLiteRepository:
 
         return self._row_to_candidate(row)
 
+    def get_message_metadata(
+        self, message_id: str, source_id: MessageSource
+    ) -> dict[str, Any]:
+        """Return a small metadata subset for a raw message."""
+
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if source_id == MessageSource.SLACK:
+                cursor.execute(
+                    """
+                    SELECT permalink, reply_count, total_reactions, attachments_count, files_count
+                    FROM raw_slack_messages
+                    WHERE message_id = ?
+                    """,
+                    (message_id,),
+                )
+                row = cursor.fetchone()
+                conn.close()
+                if row is None:
+                    return {}
+                attachments_count = int(row["attachments_count"] or 0)
+                files_count = int(row["files_count"] or 0)
+                return {
+                    "permalink": row["permalink"],
+                    "reply_count": int(row["reply_count"] or 0),
+                    "reactions_count": int(row["total_reactions"] or 0),
+                    "has_file": (attachments_count + files_count) > 0,
+                    "file_mime": None,
+                    "post_url": None,
+                    "forwarded_from": None,
+                }
+
+            if source_id == MessageSource.TELEGRAM:
+                cursor.execute(
+                    """
+                    SELECT post_url, forward_from_channel, reply_count, reactions_count, has_file, file_mime
+                    FROM raw_telegram_messages
+                    WHERE message_id = ?
+                    """,
+                    (message_id,),
+                )
+                row = cursor.fetchone()
+                conn.close()
+                if row is None:
+                    return {}
+                return {
+                    "post_url": row["post_url"],
+                    "forwarded_from": row["forward_from_channel"],
+                    "reply_count": int(row["reply_count"] or 0),
+                    "reactions_count": int(row["reactions_count"] or 0),
+                    "has_file": bool(row["has_file"]),
+                    "file_mime": row["file_mime"],
+                    "permalink": None,
+                }
+
+            conn.close()
+            return {}
+
+        except sqlite3.Error as exc:  # pragma: no cover - defensive path
+            raise RepositoryError(f"Failed to load message metadata: {exc}") from exc
+
     def get_recent_slack_messages(self, limit: int = 100) -> list[SlackMessage]:
         """Get most recent Slack messages for presentation use."""
 
@@ -1242,10 +1305,10 @@ class SQLiteRepository:
             # Build query with confidence filter
             query = """
                 SELECT * FROM events
-                WHERE COALESCE(actual_start, actual_end, planned_start, planned_end) >= ?
-                  AND COALESCE(actual_start, actual_end, planned_start, planned_end) <= ?
+                WHERE COALESCE(actual_start, actual_end, planned_start, planned_end, message_published_at, extracted_at) >= ?
+                  AND COALESCE(actual_start, actual_end, planned_start, planned_end, message_published_at, extracted_at) <= ?
                   AND confidence >= ?
-                ORDER BY COALESCE(actual_start, actual_end, planned_start, planned_end) ASC
+                ORDER BY COALESCE(actual_start, actual_end, planned_start, planned_end, message_published_at, extracted_at) ASC
             """
 
             params: list[Any] = [

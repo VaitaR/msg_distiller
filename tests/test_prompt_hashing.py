@@ -71,3 +71,32 @@ def test_prompt_hash_stability_across_runs() -> None:
         chunk_index=0,
     )
     assert inline_prompt != ""
+
+
+def test_prompt_hash_includes_metadata() -> None:
+    llm_client = _FakeLLMClient(model="gpt-5-nano", version="v1")
+    message_ts = datetime(2025, 1, 1, tzinfo=UTC)
+    links: list[str] = []
+    chunk_text = "release announcement"
+
+    base = _compute_prompt_hash(
+        llm_client=llm_client,
+        chunk_text=chunk_text,
+        links=links,
+        message_ts_dt=message_ts,
+        channel_name="general",
+        chunk_index=0,
+        metadata={"anchors": ["ABC-1"]},
+    )
+
+    different_metadata = _compute_prompt_hash(
+        llm_client=llm_client,
+        chunk_text=chunk_text,
+        links=links,
+        message_ts_dt=message_ts,
+        channel_name="general",
+        chunk_index=0,
+        metadata={"anchors": ["XYZ-9"]},
+    )
+
+    assert base != different_metadata

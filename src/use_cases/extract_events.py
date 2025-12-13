@@ -46,7 +46,9 @@ from src.observability.tracing import correlation_scope
 from src.ports.task_queue import TaskQueuePort
 from src.services import deduplicator, token_budget
 from src.services.importance_scorer import ImportanceScorer
+from src.services.llm_client_pool import LLMClientPool
 from src.services.object_registry import ObjectRegistry
+from src.services.time_completion import apply_time_completion_policy
 from src.services.validators import EventValidator
 
 logger = get_logger(__name__)
@@ -109,6 +111,7 @@ def _compute_prompt_hash(
     message_ts_dt: datetime,
     channel_name: str,
     chunk_index: int,
+    metadata: dict[str, Any] | None = None,
 ) -> str:
     """Compute deterministic prompt hash for caching."""
 
@@ -117,6 +120,7 @@ def _compute_prompt_hash(
         "links": links,
         "ts": _normalize_to_utc(message_ts_dt).isoformat(),
         "channel": channel_name,
+        "metadata": metadata or {},
     }
     serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     normalized_content_hash = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
@@ -132,6 +136,64 @@ def _compute_prompt_hash(
         ]
     )
     return hashlib.sha256(hash_input.encode("utf-8")).hexdigest()
+
+
+def _build_prompt_metadata(
+    *,
+    candidate: EventCandidate,
+    channel_name: str,
+    source_id: MessageSource,
+    repository: RepositoryProtocol,
+    settings: Settings,
+) -> dict[str, Any]:
+    """Build a small, deterministic metadata blob for LLM prompting and caching."""
+
+    max_anchors = getattr(settings, "extraction_prompt_metadata_max_anchors", 10)
+    try:
+        max_anchors_int = max(0, int(max_anchors))
+    except (TypeError, ValueError):
+        max_anchors_int = 10
+
+    anchors: list[str] = []
+    for anchor in candidate.anchors:
+        if not isinstance(anchor, str):
+            continue
+        cleaned = anchor.strip()
+        if not cleaned:
+            continue
+        if cleaned not in anchors:
+            anchors.append(cleaned[:80])
+        if len(anchors) >= max_anchors_int:
+            break
+
+    metadata: dict[str, Any] = {
+        "source_id": source_id.value,
+        "channel_id": candidate.channel,
+        "channel_name": channel_name,
+        "message_id": candidate.message_id,
+        "message_published_at": _normalize_to_utc(candidate.ts_dt).isoformat(),
+        "reply_count": int(getattr(candidate.features, "reply_count", 0) or 0),
+        "reactions_count": int(getattr(candidate.features, "reaction_count", 0) or 0),
+        "has_file": bool(getattr(candidate.features, "has_files", False)),
+        "anchors": anchors,
+    }
+
+    raw_lookup = getattr(repository, "get_message_metadata", None)
+    if callable(raw_lookup):
+        try:
+            raw_metadata = raw_lookup(candidate.message_id, source_id)
+        except Exception:  # noqa: BLE001
+            raw_metadata = None
+        if isinstance(raw_metadata, dict):
+            for key in ("permalink", "post_url", "forwarded_from", "file_mime"):
+                value = raw_metadata.get(key)
+                if isinstance(value, str) and value.strip():
+                    metadata[key] = value.strip()
+            raw_has_file = raw_metadata.get("has_file")
+            if isinstance(raw_has_file, bool):
+                metadata["has_file"] = raw_has_file
+
+    return metadata
 
 
 @dataclass(slots=True)
@@ -307,6 +369,7 @@ def _process_candidate_with_llm(
     *,
     candidate: EventCandidate,
     llm_client: LLMClient,
+    llm_client_pool: LLMClientPool | None,
     repository: RepositoryProtocol,
     settings: Settings,
     cache_ttl: timedelta | None,
@@ -330,6 +393,23 @@ def _process_candidate_with_llm(
         channel_config.channel_name if channel_config else candidate.channel
     )
 
+    effective_llm_client = llm_client
+    prompt_file_override: str | None = None
+    if llm_client_pool is not None:
+        channel_prompt_file = None
+        if channel_config is not None:
+            candidate_prompt_file = getattr(channel_config, "prompt_file", None)
+            if isinstance(candidate_prompt_file, str) and candidate_prompt_file.strip():
+                channel_prompt_file = candidate_prompt_file.strip()
+        prompt_file_override = llm_client_pool.get_effective_prompt_file(
+            source_id=candidate_source,
+            channel_prompt_file=channel_prompt_file,
+        )
+        effective_llm_client = llm_client_pool.get_client(
+            source_id=candidate_source,
+            prompt_file=prompt_file_override,
+        )
+
     logger.info(
         "processing_candidate",
         correlation_id=correlation_id,
@@ -338,11 +418,23 @@ def _process_candidate_with_llm(
         message_id=candidate.message_id[:8],
         source=candidate_source.value,
         channel=channel_name,
+        prompt_version=getattr(effective_llm_client, "prompt_version", None),
+        prompt_hash=getattr(effective_llm_client, "system_prompt_hash", None),
+        prompt_file=prompt_file_override,
     )
 
     limited_links = candidate.links_norm[:MAX_LINKS]
+    metadata: dict[str, Any] | None = None
+    if getattr(settings, "extraction_prompt_metadata_enabled", True):
+        metadata = _build_prompt_metadata(
+            candidate=candidate,
+            channel_name=channel_name,
+            source_id=candidate_source,
+            repository=repository,
+            settings=settings,
+        )
     char_budget = token_budget.characters_for_tokens(
-        llm_client.prompt_token_budget, llm_client.model
+        effective_llm_client.prompt_token_budget, effective_llm_client.model
     )
     text_chunks = token_budget.truncate_or_chunk(candidate.text_norm, char_budget)
 
@@ -362,12 +454,13 @@ def _process_candidate_with_llm(
     try:
         for chunk_index, chunk_text in enumerate(text_chunks):
             prompt_hash = _compute_prompt_hash(
-                llm_client=llm_client,
+                llm_client=effective_llm_client,
                 chunk_text=chunk_text,
                 links=limited_links,
                 message_ts_dt=candidate.ts_dt,
                 channel_name=channel_name,
                 chunk_index=chunk_index,
+                metadata=metadata,
             )
 
             llm_response: LLMResponse | None = None
@@ -401,7 +494,7 @@ def _process_candidate_with_llm(
                             LLMCallMetadata(
                                 message_id=candidate.message_id,
                                 prompt_hash=prompt_hash,
-                                model=llm_client.model,
+                                model=effective_llm_client.model,
                                 tokens_in=0,
                                 tokens_out=0,
                                 cost_usd=0.0,
@@ -424,12 +517,13 @@ def _process_candidate_with_llm(
                     chunk_index=chunk_index,
                 )
 
-                llm_response = llm_client.extract_events_with_retry(
+                llm_response = effective_llm_client.extract_events_with_retry(
                     text=chunk_text,
                     links=limited_links,
                     message_ts_dt=candidate.ts_dt,
                     channel_name=channel_name,
                     chunk_index=chunk_index,
+                    context=metadata,
                 )
 
                 logger.info(
@@ -443,7 +537,7 @@ def _process_candidate_with_llm(
 
                 metrics.llm_calls += 1
 
-                call_metadata = llm_client.get_call_metadata()
+                call_metadata = effective_llm_client.get_call_metadata()
                 call_metadata.message_id = candidate.message_id
                 call_metadata.prompt_hash = prompt_hash
                 call_metadata.cached = False
@@ -458,34 +552,19 @@ def _process_candidate_with_llm(
                 chunk_events.extend(llm_response.events)
             chunk_is_event = chunk_is_event or llm_response.is_event
 
-        events_source = chunk_events
         max_events_raw = getattr(settings, "llm_max_events_per_msg", 5)
         try:
             max_events = int(max_events_raw) if max_events_raw is not None else None
         except (TypeError, ValueError):
             max_events = 5
 
-        llm_events = (
-            events_source[:max_events] if max_events is not None else events_source
-        )
-
-        if len(events_source) > len(llm_events):
-            logger.info(
-                "llm_response_truncated",
-                correlation_id=correlation_id,
-                message_id=candidate.message_id[:8],
-                original_count=len(events_source),
-                max_events=max_events,
+        if chunk_is_event and chunk_events:
+            from src.services.intra_message_postprocess import (
+                dedup_and_rank_events_for_message,
             )
 
-        if chunk_is_event and llm_events:
-            events_to_save: list[Event] = []
-            validation_errors: list[str] = []
-
-            reaction_count = candidate.features.reaction_count
-            mention_count = 1 if candidate.features.has_mention else 0
-
-            for llm_event in llm_events:
+            all_domain_events: list[Event] = []
+            for llm_event in chunk_events:
                 domain_event = convert_llm_event_to_domain(
                     llm_event,
                     message_id=candidate.message_id,
@@ -495,6 +574,50 @@ def _process_candidate_with_llm(
                     object_registry=object_registry,
                 )
 
+                if getattr(settings, "extraction_time_completion_enabled", True):
+                    completion = apply_time_completion_policy(
+                        domain_event,
+                        message_published_at=domain_event.message_published_at,
+                        fallback_ts=candidate.ts_dt,
+                    )
+                    if completion.changed:
+                        logger.warning(
+                            "time_completed_from_message_ts",
+                            correlation_id=correlation_id,
+                            message_id=candidate.message_id[:8],
+                            status=domain_event.status.value,
+                            completed_field=completion.completed_field,
+                            time_source=domain_event.time_source.value,
+                            time_confidence=domain_event.time_confidence,
+                        )
+                        domain_event.dedup_key = deduplicator.generate_dedup_key(
+                            domain_event
+                        )
+
+                all_domain_events.append(domain_event)
+
+            selected_events = dedup_and_rank_events_for_message(
+                all_domain_events,
+                max_events=max_events,
+            )
+
+            if len(all_domain_events) > len(selected_events):
+                logger.info(
+                    "llm_message_postprocess_reduced",
+                    correlation_id=correlation_id,
+                    message_id=candidate.message_id[:8],
+                    original_count=len(all_domain_events),
+                    selected_count=len(selected_events),
+                    max_events=max_events,
+                )
+
+            events_to_save: list[Event] = []
+            validation_errors: list[str] = []
+
+            reaction_count = candidate.features.reaction_count
+            mention_count = 1 if candidate.features.has_mention else 0
+
+            for domain_event in selected_events:
                 importance_result = importance_scorer.calculate_importance(
                     domain_event,
                     llm_score=None,
@@ -510,14 +633,14 @@ def _process_candidate_with_llm(
                 if critical_errors:
                     validation_errors.extend(
                         [
-                            f"Event {llm_event.object_name_raw}: {error}"
+                            f"Event {domain_event.object_name_raw}: {error}"
                             for error in critical_errors
                         ]
                     )
                     logger.warning(
                         "event_validation_failed",
                         correlation_id=correlation_id,
-                        event_object=llm_event.object_name_raw,
+                        event_object=domain_event.object_name_raw,
                         critical_errors=critical_errors,
                         warnings_count=len(validation_summary["warnings"]),
                         info_count=len(validation_summary["info"]),
@@ -531,7 +654,7 @@ def _process_candidate_with_llm(
                     logger.info(
                         "event_validation_warnings",
                         correlation_id=correlation_id,
-                        event_object=llm_event.object_name_raw,
+                        event_object=domain_event.object_name_raw,
                         warnings=validation_summary["warnings"],
                     )
 
@@ -540,7 +663,7 @@ def _process_candidate_with_llm(
                 metrics.events_extracted += len(events_to_save)
                 metrics.dedup_required = True
 
-            total_events_processed = len(events_source)
+            total_events_processed = len(selected_events)
             blocked_events = total_events_processed - len(events_to_save)
             saved_events = len(events_to_save)
 
@@ -727,6 +850,11 @@ def extract_events_use_case(
             errors: list[str] = []
             cache_ttl = _resolve_cache_ttl(settings)
             validator = event_validator or _get_event_validator()
+            llm_pool = (
+                LLMClientPool(base_client=llm_client, settings=settings)
+                if isinstance(llm_client, LLMClient)
+                else None
+            )
 
             for index, candidate in enumerate(candidates, start=1):
                 candidates_processed += 1
@@ -734,6 +862,7 @@ def extract_events_use_case(
                 metrics = _process_candidate_with_llm(
                     candidate=candidate,
                     llm_client=llm_client,
+                    llm_client_pool=llm_pool,
                     repository=repository,
                     settings=settings,
                     cache_ttl=cache_ttl,
@@ -885,6 +1014,11 @@ def process_llm_candidate_task_use_case(
         metrics = _process_candidate_with_llm(
             candidate=candidate,
             llm_client=llm_client,
+            llm_client_pool=(
+                LLMClientPool(base_client=llm_client, settings=settings)
+                if isinstance(llm_client, LLMClient)
+                else None
+            ),
             repository=repository,
             settings=settings,
             cache_ttl=cache_ttl,
