@@ -1,3 +1,4 @@
+# Deprecated: prefer `uv sync --frozen --no-install-project` (uses `pyproject.toml` + `uv.lock`).
 -r requirements.txt
 
 # Testing

@@ -81,12 +81,11 @@ src/
 # Clone repository
 cd /path/to/slack_event_manager
 
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+# Install uv (one time)
+pip install uv
 
-# Install dependencies
-pip install -r requirements.txt
+# Sync dependencies from lockfile (creates .venv)
+uv sync --frozen --no-install-project
 ```
 
 ### 2. Configuration
@@ -511,9 +510,9 @@ The project uses a **unified development workflow** with complete synchronizatio
 # Complete setup (recommended)
 make dev-setup     # Install deps + pre-commit hooks
 
-# Manual setup
-pip install -r requirements.txt
-make pre-commit-install
+# Manual setup (equivalent)
+uv sync --frozen --no-install-project
+uv run pre-commit install
 ```
 
 ### Git Workflow

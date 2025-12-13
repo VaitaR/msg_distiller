@@ -60,11 +60,12 @@ jobs:
 
       - name: Install dependencies (matches Makefile exactly)
         run: |
-          uv pip install --python $(which python) -r requirements-dev.txt
+          uv lock --check
+          uv sync --python $(which python) --frozen --no-install-project
 
       - name: Mypy (strict) - matches Makefile exactly
         run: |
-          python -m mypy src --config-file pyproject.toml
+          uv run mypy src --config-file pyproject.toml
 
   test:
     name: Run Tests
@@ -86,14 +87,15 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install --python $(which python) -r requirements-dev.txt
+          uv lock --check
+          uv sync --python $(which python) --frozen --no-install-project
 
       - name: Run tests with coverage (matches Makefile exactly)
         env:
           SLACK_BOT_TOKEN: dummy
           OPENAI_API_KEY: dummy
         run: |
-          python -m pytest --cov=src --cov-report=term-missing --cov-report=html --timeout=30
+          uv run python -m pytest --cov=src --cov-report=term-missing --cov-report=html --timeout=30
 
       - name: Upload coverage HTML report
         if: always()
