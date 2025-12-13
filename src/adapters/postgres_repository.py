@@ -1058,9 +1058,9 @@ class PostgresRepository:
                 cur.execute(
                     """
                     SELECT * FROM events
-                    WHERE COALESCE(actual_start, actual_end, planned_start, planned_end) >= %s
-                      AND COALESCE(actual_start, actual_end, planned_start, planned_end) <= %s
-                    ORDER BY COALESCE(actual_start, actual_end, planned_start, planned_end) DESC
+                    WHERE COALESCE(actual_start, actual_end, planned_start, planned_end, extracted_at) >= %s
+                      AND COALESCE(actual_start, actual_end, planned_start, planned_end, extracted_at) <= %s
+                    ORDER BY COALESCE(actual_start, actual_end, planned_start, planned_end, extracted_at) DESC
                     """,
                     (start_dt, end_dt),
                 )

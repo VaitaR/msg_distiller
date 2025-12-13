@@ -1186,9 +1186,9 @@ class SQLiteRepository:
             cursor.execute(
                 """
                 SELECT * FROM events
-                WHERE COALESCE(actual_start, actual_end, planned_start, planned_end) >= ?
-                  AND COALESCE(actual_start, actual_end, planned_start, planned_end) <= ?
-                ORDER BY COALESCE(actual_start, actual_end, planned_start, planned_end) ASC
+                WHERE COALESCE(actual_start, actual_end, planned_start, planned_end, extracted_at) >= ?
+                  AND COALESCE(actual_start, actual_end, planned_start, planned_end, extracted_at) <= ?
+                ORDER BY COALESCE(actual_start, actual_end, planned_start, planned_end, extracted_at) ASC
                 """,
                 (start_dt.isoformat(), end_dt.isoformat()),
             )
