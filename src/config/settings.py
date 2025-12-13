@@ -425,6 +425,20 @@ class Settings(BaseSettings):
         _assign("validation_max_links", validation_config.get("max_links"))
         _assign("validation_max_impact_area", validation_config.get("max_impact_area"))
 
+        extraction_config = config.get("extraction") or {}
+        _assign(
+            "extraction_time_completion_enabled",
+            extraction_config.get("time_completion_enabled"),
+        )
+        _assign(
+            "extraction_prompt_metadata_enabled",
+            extraction_config.get("prompt_metadata_enabled"),
+        )
+        _assign(
+            "extraction_prompt_metadata_max_anchors",
+            extraction_config.get("prompt_metadata_max_anchors"),
+        )
+
         telegram_channels_config = config.get("telegram_channels")
         if telegram_channels_config:
             parsed_telegram_channels: list[TelegramChannelConfig] = []
@@ -631,6 +645,21 @@ class Settings(BaseSettings):
     validation_max_links: int = Field(default=3, description="Maximum number of links")
     validation_max_impact_area: int = Field(
         default=3, description="Maximum number of impact areas"
+    )
+
+    # Extraction quality flags (see docs/TECHNICAL_SPEC_EXTRACTION_QUALITY.md)
+    extraction_time_completion_enabled: bool = Field(
+        default=True,
+        description="Fill required time fields from message timestamp when missing",
+    )
+    extraction_prompt_metadata_enabled: bool = Field(
+        default=True,
+        description="Include structured message metadata in the LLM prompt",
+    )
+    extraction_prompt_metadata_max_anchors: int = Field(
+        default=10,
+        ge=0,
+        description="Maximum anchors to include in prompt metadata",
     )
 
     # Observability

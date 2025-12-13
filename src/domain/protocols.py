@@ -268,6 +268,17 @@ class RepositoryProtocol(Protocol):
 
         ...
 
+    def get_message_metadata(
+        self, message_id: str, source_id: MessageSource
+    ) -> dict[str, Any]:
+        """Return a small metadata subset for a raw message.
+
+        Used to enrich LLM prompts and ensure prompt hashing includes relevant
+        deterministic context (anchors, permalinks, forwarded-from, file details).
+        """
+
+        ...
+
     def get_recent_slack_messages(self, limit: int = 100) -> list[SlackMessage]:
         """Get most recent Slack messages for presentation use."""
 
@@ -516,7 +527,13 @@ class LLMClientProtocol(Protocol):
     """Protocol for LLM API interactions."""
 
     def extract_events(
-        self, text: str, links: list[str], message_ts_dt: datetime
+        self,
+        text: str,
+        links: list[str],
+        message_ts_dt: datetime,
+        channel_name: str = "",
+        *,
+        context: dict[str, Any] | None = None,
     ) -> LLMResponse:
         """Extract events from message text using LLM.
 
@@ -524,6 +541,8 @@ class LLMClientProtocol(Protocol):
             text: Normalized message text
             links: Top 3 most relevant links
             message_ts_dt: Message timestamp for date resolution fallback
+            channel_name: Optional channel name for extra context
+            context: Optional deterministic message metadata for prompting/caching
 
         Returns:
             Structured LLM response

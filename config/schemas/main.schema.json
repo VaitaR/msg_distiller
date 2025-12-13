@@ -199,6 +199,24 @@
           "description": "Logging level"
         }
       }
+    },
+    "extraction": {
+      "type": "object",
+      "properties": {
+        "time_completion_enabled": {
+          "type": "boolean",
+          "description": "Fill required time fields from message timestamp when missing"
+        },
+        "prompt_metadata_enabled": {
+          "type": "boolean",
+          "description": "Include structured message metadata in the LLM prompt"
+        },
+        "prompt_metadata_max_anchors": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum anchors to include in prompt metadata"
+        }
+      }
     }
   }
 }

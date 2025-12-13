@@ -146,10 +146,14 @@ def test_extract_events_use_case_persists_llm_response(
     """LLM responses should be persisted and limited per settings."""
 
     candidate = _make_candidate()
-    llm_response = LLMResponse(
-        is_event=True,
-        events=[_make_llm_event(), _make_llm_event(), _make_llm_event()],
-    )
+    event1 = _make_llm_event()
+    event2 = _make_llm_event()
+    event2.anchor = "XYZ-789"
+    event2.anchors = ["XYZ-789"]
+    event3 = _make_llm_event()
+    event3.anchor = "QWE-111"
+    event3.anchors = ["QWE-111"]
+    llm_response = LLMResponse(is_event=True, events=[event1, event2, event3])
 
     repository = MagicMock()
     repository.get_candidates_for_extraction.return_value = [candidate]

@@ -14,6 +14,12 @@ llm:
   max_events_per_msg: 5
   cache_ttl_days: 21  # Purge cached LLM responses after 21 days
 
+# Extraction quality controls
+extraction:
+  time_completion_enabled: true  # Fill required event times from message timestamp
+  prompt_metadata_enabled: true  # Include deterministic metadata block in user prompt
+  prompt_metadata_max_anchors: 10  # Limit anchors included in metadata
+
 # Database Configuration
 database:
   path: data/slack_events.db

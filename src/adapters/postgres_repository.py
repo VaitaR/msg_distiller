@@ -918,6 +918,61 @@ class PostgresRepository:
 
         return self._row_to_candidate(dict(row))
 
+    def get_message_metadata(
+        self, message_id: str, source_id: MessageSource
+    ) -> dict[str, Any]:
+        """Return a small metadata subset for a raw message."""
+
+        with self._get_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                if source_id == MessageSource.SLACK:
+                    cur.execute(
+                        """
+                        SELECT permalink, reply_count, total_reactions, attachments_count, files_count
+                        FROM raw_slack_messages
+                        WHERE message_id = %s
+                        """,
+                        (message_id,),
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        return {}
+                    attachments_count = int(row.get("attachments_count") or 0)
+                    files_count = int(row.get("files_count") or 0)
+                    return {
+                        "permalink": row.get("permalink"),
+                        "reply_count": int(row.get("reply_count") or 0),
+                        "reactions_count": int(row.get("total_reactions") or 0),
+                        "has_file": (attachments_count + files_count) > 0,
+                        "file_mime": None,
+                        "post_url": None,
+                        "forwarded_from": None,
+                    }
+
+                if source_id == MessageSource.TELEGRAM:
+                    cur.execute(
+                        """
+                        SELECT post_url, forward_from_channel, reply_count, reactions_count, has_file, file_mime
+                        FROM raw_telegram_messages
+                        WHERE message_id = %s
+                        """,
+                        (message_id,),
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        return {}
+                    return {
+                        "post_url": row.get("post_url"),
+                        "forwarded_from": row.get("forward_from_channel"),
+                        "reply_count": int(row.get("reply_count") or 0),
+                        "reactions_count": int(row.get("reactions_count") or 0),
+                        "has_file": bool(row.get("has_file")),
+                        "file_mime": row.get("file_mime"),
+                        "permalink": None,
+                    }
+
+        return {}
+
     def get_recent_slack_messages(self, limit: int = 100) -> list[SlackMessage]:
         """Get most recent Slack messages for presentation use."""
 
@@ -1076,6 +1131,41 @@ class PostgresRepository:
                 )
                 rows = cur.fetchall()
                 # Get column names from cursor description
+                columns = [desc[0] for desc in cur.description]
+                return [self._row_to_event(dict(zip(columns, row))) for row in rows]
+
+    def get_events_in_window_filtered(
+        self,
+        start_dt: datetime,
+        end_dt: datetime,
+        min_confidence: float = 0.0,
+        max_events: int | None = None,
+    ) -> list[Event]:
+        """Get filtered events within date window.
+
+        Matches SQLite semantics, including fallback to message_published_at and extracted_at.
+        """
+
+        params: list[object] = [start_dt, end_dt, min_confidence]
+        limit_clause = ""
+        if max_events is not None:
+            limit_clause = " LIMIT %s"
+            params.append(max_events)
+
+        with self._get_connection() as conn:
+            with conn.cursor(cursor_factory=extensions.cursor) as cur:
+                cur.execute(
+                    f"""
+                    SELECT * FROM events
+                    WHERE COALESCE(actual_start, actual_end, planned_start, planned_end, message_published_at, extracted_at) >= %s
+                      AND COALESCE(actual_start, actual_end, planned_start, planned_end, message_published_at, extracted_at) <= %s
+                      AND confidence >= %s
+                    ORDER BY COALESCE(actual_start, actual_end, planned_start, planned_end, message_published_at, extracted_at) ASC
+                    {limit_clause}
+                    """,
+                    tuple(params),
+                )
+                rows = cur.fetchall()
                 columns = [desc[0] for desc in cur.description]
                 return [self._row_to_event(dict(zip(columns, row))) for row in rows]
 
