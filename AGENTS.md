@@ -1,17 +1,17 @@
 # AGENTS.md
 
 **Last Updated:** 2025-10-23
-**Status:** ✅ Production Ready - Structured Logging + PostgreSQL Support
+**Status:** Production Ready - Structured Logging + PostgreSQL Support
 
 ## Project Overview
 
 This is a **Slack Event Manager** that processes messages from Slack channels to extract and categorize release information, product updates, and other relevant events. The system uses AI (OpenAI LLM) to parse unstructured Slack messages and stores structured data in **PostgreSQL or SQLite** for analysis and monitoring.
 
 **Key Components:**
-- **Multi-Source Integration**: Fetches messages from Slack and Telegram channels (✅ with rate limit handling)
-- **LLM Processing**: Uses OpenAI GPT-5-nano to extract structured data (✅ with comprehensive logging)
-- **Event Validation**: Validates event structure, semantics, and quality before publishing (✅ integrated in all use cases)
-- **Structured Logging**: Production-ready JSON logging with structlog (✅ for monitoring and alerting)
+- **Multi-Source Integration**: Fetches messages from Slack and Telegram channels (with rate limit handling)
+- **LLM Processing**: Uses OpenAI GPT-5-nano to extract structured data (with comprehensive logging)
+- **Event Validation**: Validates event structure, semantics, and quality before publishing (integrated in all use cases)
+- **Structured Logging**: Production-ready JSON logging with structlog (for monitoring and alerting)
 - **Scoring Engine**: Intelligent candidate selection with configurable weights
 - **Dual Database Support**: PostgreSQL (production) or SQLite (development) with seamless switching
 - **Deduplication**: Merges similar events across messages using fuzzy matching
@@ -25,11 +25,11 @@ Storage → Event Validation → Digest Publishing → Event Validation
 ```
 
 **Production Validation:**
-- ✅ Tested with 20 real messages from #releases channel
-- ✅ 100% LLM extraction success rate (5/5 calls)
-- ✅ Total cost: $0.0031 for 20 messages
-- ✅ Average latency: 13.5s per LLM call
-- ✅ Projected cost: ~$0.48-$4.65/month depending on volume
+- Tested with 20 real messages from #releases channel
+- 100% LLM extraction success rate (5/5 calls)
+- Total cost: $0.0031 for 20 messages
+- Average latency: 13.5s per LLM call
+- Projected cost: ~$0.48-$4.65/month depending on volume
 
 ## Setup Commands
 
@@ -70,7 +70,7 @@ uv sync --frozen --no-install-project
 make dev-setup
 
 # 5. Verify configuration
-python -c "from src.config.settings import get_settings; s = get_settings(); print(f'✅ Settings loaded: {s.llm_model}, temp={s.llm_temperature}')"
+python -c "from src.config.settings import get_settings; s = get_settings(); print(f'Settings loaded: {s.llm_model}, temp={s.llm_temperature}')"
 ```
 
 **Configuration System:**
