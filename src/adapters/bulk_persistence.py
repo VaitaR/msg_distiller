@@ -55,6 +55,7 @@ class EventDTO:
             event.message_id,
             json.dumps(event.source_channels),
             _serialize_datetime(event.extracted_at),
+            _serialize_datetime(event.message_published_at),
             event.source_id.value,
             event.action.value,
             event.object_id,
@@ -189,7 +190,7 @@ def _postgres_events_batch(
 
     insert_sql = """
         INSERT INTO events (
-            event_id, message_id, source_channels, extracted_at, source_id,
+            event_id, message_id, source_channels, extracted_at, message_published_at, source_id,
             action, object_id, object_name_raw, qualifiers, stroke, anchor,
             category, status, change_type, environment, severity,
             planned_start, planned_end, actual_start, actual_end,
@@ -197,7 +198,7 @@ def _postgres_events_batch(
             summary, why_it_matters, links, anchors, impact_area, impact_type,
             confidence, importance, cluster_key, dedup_key
         ) VALUES (
-            %s, %s, %s, %s, %s,
+            %s, %s, %s, %s, %s, %s,
             %s, %s, %s, %s, %s, %s,
             %s, %s, %s, %s, %s,
             %s, %s, %s, %s,
@@ -209,6 +210,7 @@ def _postgres_events_batch(
             message_id = EXCLUDED.message_id,
             source_channels = EXCLUDED.source_channels,
             extracted_at = EXCLUDED.extracted_at,
+            message_published_at = EXCLUDED.message_published_at,
             source_id = EXCLUDED.source_id,
             action = EXCLUDED.action,
             object_id = EXCLUDED.object_id,
@@ -257,7 +259,7 @@ def _sqlite_events_batch(
 
     insert_sql = """
         INSERT OR REPLACE INTO events (
-            event_id, message_id, source_channels, extracted_at, source_id,
+            event_id, message_id, source_channels, extracted_at, message_published_at, source_id,
             action, object_id, object_name_raw, qualifiers, stroke, anchor,
             category, status, change_type, environment, severity,
             planned_start, planned_end, actual_start, actual_end,
@@ -265,7 +267,7 @@ def _sqlite_events_batch(
             summary, why_it_matters, links, anchors, impact_area, impact_type,
             confidence, importance, cluster_key, dedup_key
         ) VALUES (
-            ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?,
             ?, ?, ?, ?,

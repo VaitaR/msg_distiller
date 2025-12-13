@@ -468,6 +468,9 @@ class Event(BaseModel):
     source_channels: list[str] = Field(
         default_factory=list, description="Source channel names"
     )
+    message_published_at: datetime | None = Field(
+        default=None, description="Original message timestamp (UTC)"
+    )
     extracted_at: datetime = Field(
         default_factory=_utcnow, description="Extraction timestamp"
     )
@@ -620,6 +623,7 @@ class Event(BaseModel):
             or self.actual_end
             or self.planned_start
             or self.planned_end
+            or self.message_published_at
         )
 
     @property
