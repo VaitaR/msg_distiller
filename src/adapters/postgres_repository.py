@@ -468,6 +468,15 @@ class PostgresRepository:
         else:
             extracted_at = extracted_at_raw.astimezone(pytz.UTC)
 
+        message_published_at_raw = row.get("message_published_at")
+        if isinstance(message_published_at_raw, datetime):
+            if message_published_at_raw.tzinfo is None:
+                message_published_at = message_published_at_raw.replace(tzinfo=pytz.UTC)
+            else:
+                message_published_at = message_published_at_raw.astimezone(pytz.UTC)
+        else:
+            message_published_at = None
+
         return Event(
             # Identification
             event_id=UUID(row["event_id"]),
@@ -475,6 +484,7 @@ class PostgresRepository:
             source_channels=row.get("source_channels")
             or [],  # Already parsed from JSONB
             extracted_at=extracted_at,
+            message_published_at=message_published_at,
             source_id=MessageSource(source_id_value),
             # Title slots
             action=ActionType(row["action"]),
@@ -1058,9 +1068,9 @@ class PostgresRepository:
                 cur.execute(
                     """
                     SELECT * FROM events
-                    WHERE COALESCE(actual_start, actual_end, planned_start, planned_end) >= %s
-                      AND COALESCE(actual_start, actual_end, planned_start, planned_end) <= %s
-                    ORDER BY COALESCE(actual_start, actual_end, planned_start, planned_end) DESC
+                    WHERE COALESCE(actual_start, actual_end, planned_start, planned_end, message_published_at, extracted_at) >= %s
+                      AND COALESCE(actual_start, actual_end, planned_start, planned_end, message_published_at, extracted_at) <= %s
+                    ORDER BY COALESCE(actual_start, actual_end, planned_start, planned_end, message_published_at, extracted_at) DESC
                     """,
                     (start_dt, end_dt),
                 )

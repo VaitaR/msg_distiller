@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
-Streamlit Demo App for Slack Event Manager.
+Streamlit Dashboard for Event Manager.
 
-This app provides a visual interface for the Slack Event Manager pipeline,
-allowing users to configure settings, run the pipeline, and visualize results.
+Clean read-only frontend for viewing extracted events from Slack (internal)
+and Telegram (external/market) sources.
 """
 
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
-from uuid import uuid4
 
 import pandas as pd
 import plotly.express as px
@@ -17,586 +16,967 @@ import streamlit as st
 from src.adapters.repository_factory import create_repository
 from src.config.settings import get_settings
 from src.domain.protocols import RepositoryProtocol
-from src.observability.metrics import ensure_metrics_exporter
-from src.presentation.streamlit_orchestration import (
-    RateLimitExceededError,
-    job_result,
-    job_status,
-    submit_ingest_extract_job,
-)
-from src.use_cases.dashboard_queries import (
-    fetch_recent_candidates,
-    fetch_recent_events,
-    fetch_recent_messages,
-)
-from src.use_cases.pipeline_orchestrator import PipelineParams
 
-# UI Constants
-MAX_MESSAGE_LENGTH: Final[int] = 150
-MAX_CANDIDATE_TEXT_LENGTH: Final[int] = 200
-SESSION_ID_KEY: Final[str] = "session_id"
-SESSION_JOB_ID_KEY: Final[str] = "active_job_id"
-SESSION_JOB_RESULT_KEY: Final[str] = "last_job_result"
-SESSION_STATUS_MESSAGE_KEY: Final[str] = "job_status_message"
-POLL_INTERVAL_MS: Final[int] = 1500
+# ============================================================================
+# CONSTANTS
+# ============================================================================
+
+MAX_TITLE_LENGTH: Final[int] = 80
+MAX_SUMMARY_LENGTH: Final[int] = 150
+DATE_RANGE_PAIR_LENGTH: Final[int] = 2
+TIMELINE_MAX_EVENTS: Final[int] = 30
+CALENDAR_TITLE_TRUNCATE_LENGTH: Final[int] = 12
+POPOVER_SUMMARY_PREVIEW_LENGTH: Final[int] = 200
+
+# Category colors for consistent styling
+CATEGORY_COLORS: Final[dict[str, str]] = {
+    "product": "#2ECC71",  # Green
+    "risk": "#E74C3C",  # Red
+    "process": "#3498DB",  # Blue
+    "marketing": "#9B59B6",  # Purple
+    "org": "#F39C12",  # Orange
+    "unknown": "#95A5A6",  # Gray
+}
+
+STATUS_COLORS: Final[dict[str, str]] = {
+    "planned": "#BDC3C7",  # Light gray
+    "confirmed": "#85C1E9",  # Light blue
+    "started": "#F1C40F",  # Yellow
+    "completed": "#27AE60",  # Green
+    "postponed": "#E67E22",  # Orange
+    "canceled": "#E74C3C",  # Red
+    "rolled_back": "#8E44AD",  # Purple
+    "updated": "#3498DB",  # Blue
+}
 
 
+# ============================================================================
+# DATA ACCESS
+# ============================================================================
+
+
+def fetch_channel_messages(
+    slack_client: Any,
+    *,
+    channels: list[str],
+    limit: int | None = None,
+) -> list[tuple[str, dict[str, Any]]]:
+    """Fetch messages from multiple Slack channels while preserving channel identity."""
+
+    collected: list[tuple[str, dict[str, Any]]] = []
+    for channel_id in channels:
+        messages = slack_client.fetch_messages(channel_id=channel_id, limit=limit)
+        for message in messages:
+            collected.append((channel_id, message))
+    return collected
+
+
+@st.cache_resource
 def get_repository() -> RepositoryProtocol:
-    """Get repository instance based on settings.
-
-    Returns:
-        Repository instance (SQLite or PostgreSQL)
-    """
+    """Get cached repository instance."""
     settings = get_settings()
     return create_repository(settings)
 
 
-def _ensure_session_defaults() -> None:
-    if SESSION_ID_KEY not in st.session_state:
-        st.session_state[SESSION_ID_KEY] = str(uuid4())
-    st.session_state.setdefault(SESSION_JOB_ID_KEY, None)
-    st.session_state.setdefault(SESSION_JOB_RESULT_KEY, None)
-    st.session_state.setdefault(SESSION_STATUS_MESSAGE_KEY, "")
+@st.cache_data(ttl=30)
+def fetch_events_by_source(source_id: str, limit: int = 500) -> pd.DataFrame:
+    """Fetch events filtered by source and convert to DataFrame."""
+    repo = get_repository()
+
+    # Get events from last 90 days to future
+    start_date = datetime.now(UTC) - timedelta(days=90)
+    end_date = datetime.now(UTC) + timedelta(days=365)
+
+    all_events = repo.get_events_in_window(start_date, end_date)
+
+    # Filter by source
+    events = [e for e in all_events if e.source_id.value == source_id][:limit]
+
+    if not events:
+        return pd.DataFrame()
+
+    data = []
+    for evt in events:
+        data.append(
+            {
+                "event_id": str(evt.event_id)[:8],
+                "title": evt.title[:MAX_TITLE_LENGTH] + "..."
+                if len(evt.title) > MAX_TITLE_LENGTH
+                else evt.title,
+                "full_title": evt.title,
+                "category": evt.category.value,
+                "status": evt.status.value,
+                "event_date": evt.event_date,
+                "confidence": evt.confidence,
+                "importance": evt.importance,
+                "summary": (evt.summary[:MAX_SUMMARY_LENGTH] + "...")
+                if evt.summary and len(evt.summary) > MAX_SUMMARY_LENGTH
+                else (evt.summary or ""),
+                "full_summary": evt.summary or "",
+                "environment": evt.environment.value if evt.environment else "unknown",
+                "source_id": evt.source_id.value,
+                "links": evt.links[:3] if evt.links else [],
+                "change_type": evt.change_type.value if evt.change_type else "other",
+            }
+        )
+
+    df = pd.DataFrame(data)
+
+    # Ensure event_date is datetime
+    if "event_date" in df.columns:
+        df["event_date"] = pd.to_datetime(df["event_date"], utc=True)
+
+    return df
 
 
-def _require_auth() -> str:
-    """No authentication required - return a default user ID."""
-    if not st.session_state.get(SESSION_ID_KEY):
-        st.session_state[SESSION_ID_KEY] = str(uuid4())
-    return str(st.session_state[SESSION_ID_KEY])
+# ============================================================================
+# FILTER COMPONENTS
+# ============================================================================
 
 
-def _submit_pipeline_job(message_limit: int, channels: list[str], user_id: str) -> str:
-    params = PipelineParams(message_limit=message_limit, channel_ids=channels)
-    job_id = submit_ingest_extract_job(params, user_id)
-    st.session_state[SESSION_JOB_ID_KEY] = job_id
-    st.session_state[SESSION_JOB_RESULT_KEY] = None
-    st.session_state[SESSION_STATUS_MESSAGE_KEY] = "Job submitted"
-    return job_id
+def render_filters(df: pd.DataFrame, key_prefix: str) -> pd.DataFrame:
+    """Render filter controls and return filtered DataFrame."""
 
+    if df.empty:
+        return df
 
-def _render_job_status(job_id: str) -> None:
-    status = job_status(job_id)
-    progress_value = float(status.get("progress", 0.0))
-    st.progress(progress_value)
-    status_raw = str(status.get("status", "unknown")).lower()
-    status_text = status_raw.capitalize()
-    message = status.get("message") or ""
-    st.info(f"Status: {status_text} {message}")
+    # Create filter columns
+    col1, col2, col3, col4 = st.columns(4)
 
-    if status_raw in {"succeeded", "failed"}:
-        final = job_result(job_id)
-        st.session_state[SESSION_JOB_RESULT_KEY] = final
-        st.session_state[SESSION_JOB_ID_KEY] = None
-        st.session_state[SESSION_STATUS_MESSAGE_KEY] = status_text
-        if status_raw == "failed":
-            error_msg = status.get("error") or "Pipeline failed"
-            st.error(error_msg)
-        else:
-            st.success("Pipeline completed successfully")
-
-
-def _render_job_summary(result: dict[str, object]) -> None:
-    st.subheader("Latest Pipeline Run")
-    correlation_id = result.get("correlation_id")
-    if correlation_id:
-        st.caption(f"Correlation ID: {correlation_id}")
-
-    ingest = result.get("ingest", {})
-    extract = result.get("extract", {})
-    dedup = result.get("dedup", {})
-
-    col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric(
-            "Messages Saved",
-            ingest.get("messages_saved", 0),
-            help="Total messages persisted during ingestion",
+        # Category filter
+        categories = ["All"] + sorted(df["category"].unique().tolist())
+        selected_category = st.selectbox(
+            "📂 Category", options=categories, key=f"{key_prefix}_category"
         )
+
     with col2:
-        st.metric(
-            "Events Extracted",
-            extract.get("events_extracted", 0),
-            help="Events produced by the extraction stage",
+        # Status filter
+        statuses = ["All"] + sorted(df["status"].unique().tolist())
+        selected_status = st.selectbox(
+            "📊 Status", options=statuses, key=f"{key_prefix}_status"
         )
+
     with col3:
-        st.metric(
-            "Final Events",
-            dedup.get("total_events", 0),
-            help="Events remaining after deduplication",
+        # Importance filter
+        min_importance = st.slider(
+            "⭐ Min Importance",
+            min_value=0,
+            max_value=100,
+            value=0,
+            key=f"{key_prefix}_importance",
         )
 
+    with col4:
+        # Confidence filter
+        min_confidence = st.slider(
+            "🎯 Min Confidence",
+            min_value=0.0,
+            max_value=1.0,
+            value=0.0,
+            step=0.1,
+            key=f"{key_prefix}_confidence",
+        )
 
-# Page configuration
-st.set_page_config(
-    page_title="Slack Event Manager",
-    page_icon="📅",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+    # Second row: search and date range
+    col5, col6 = st.columns([2, 2])
 
-# Custom CSS for better styling
-st.markdown(
-    """
-<style>
-.main-header {
-    font-size: 2.5rem;
-    font-weight: bold;
-    color: #1f77b4;
-    text-align: center;
-    margin-bottom: 2rem;
-}
-.metric-card {
-    background-color: #f0f2f6;
-    padding: 1rem;
-    border-radius: 0.5rem;
-    margin: 0.5rem 0;
-}
-</style>
-""",
-    unsafe_allow_html=True,
-)
+    with col5:
+        search_query = st.text_input(
+            "🔍 Search in titles",
+            placeholder="Type to search...",
+            key=f"{key_prefix}_search",
+        )
+
+    with col6:
+        # Date range filter
+        if df["event_date"].notna().any():
+            min_date = df["event_date"].min().date()
+            max_date = df["event_date"].max().date()
+
+            date_range = st.date_input(
+                "📅 Date Range",
+                value=(min_date, max_date),
+                min_value=min_date,
+                max_value=max_date,
+                key=f"{key_prefix}_date_range",
+            )
+        else:
+            date_range = None
+
+    # Apply filters
+    filtered_df = df.copy()
+
+    if selected_category != "All":
+        filtered_df = filtered_df[filtered_df["category"] == selected_category]
+
+    if selected_status != "All":
+        filtered_df = filtered_df[filtered_df["status"] == selected_status]
+
+    filtered_df = filtered_df[filtered_df["importance"] >= min_importance]
+    filtered_df = filtered_df[filtered_df["confidence"] >= min_confidence]
+
+    if search_query:
+        mask = filtered_df["full_title"].str.contains(
+            search_query, case=False, na=False
+        )
+        filtered_df = filtered_df[mask]
+
+    if (
+        date_range
+        and len(date_range) == DATE_RANGE_PAIR_LENGTH
+        and filtered_df["event_date"].notna().any()
+    ):
+        start, end = date_range
+        # Convert to datetime for comparison
+        start_dt = pd.Timestamp(start, tz="UTC")
+        end_dt = pd.Timestamp(end, tz="UTC") + pd.Timedelta(days=1)
+        mask = (filtered_df["event_date"] >= start_dt) & (
+            filtered_df["event_date"] < end_dt
+        )
+        filtered_df = filtered_df[mask]
+
+    return filtered_df
+
+
+# ============================================================================
+# TABLE COMPONENTS
+# ============================================================================
+
+
+def render_events_table(df: pd.DataFrame, key_prefix: str) -> None:
+    """Render events table with proper column configuration."""
+
+    if df.empty:
+        st.info("No events match the selected filters.")
+        return
+
+    # Show count
+    st.caption(f"Showing {len(df)} events")
+
+    # Prepare display DataFrame
+    display_df = df[
+        [
+            "title",
+            "category",
+            "status",
+            "event_date",
+            "importance",
+            "confidence",
+            "environment",
+            "change_type",
+        ]
+    ].copy()
+
+    # Format date for display
+    display_df["event_date"] = display_df["event_date"].dt.strftime("%Y-%m-%d %H:%M")
+
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "title": st.column_config.TextColumn(
+                "📌 Title", width="large", help="Event title"
+            ),
+            "category": st.column_config.TextColumn(
+                "📂 Category",
+                width="small",
+            ),
+            "status": st.column_config.TextColumn(
+                "📊 Status",
+                width="small",
+            ),
+            "event_date": st.column_config.TextColumn(
+                "📅 Date",
+                width="medium",
+            ),
+            "importance": st.column_config.ProgressColumn(
+                "⭐ Importance",
+                min_value=0,
+                max_value=100,
+                format="%d",
+            ),
+            "confidence": st.column_config.ProgressColumn(
+                "🎯 Confidence",
+                min_value=0,
+                max_value=1,
+                format="%.1f",
+            ),
+            "environment": st.column_config.TextColumn(
+                "🌍 Env",
+                width="small",
+            ),
+            "change_type": st.column_config.TextColumn(
+                "🔄 Type",
+                width="small",
+            ),
+        },
+    )
+
+
+def render_metrics(df: pd.DataFrame, source_name: str) -> None:
+    """Render summary metrics for events."""
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+
+    with col1:
+        st.metric("📊 Total", len(df))
+
+    with col2:
+        risk_count = len(df[df["category"] == "risk"]) if not df.empty else 0
+        st.metric("🚨 Risks", risk_count)
+
+    with col3:
+        product_count = len(df[df["category"] == "product"]) if not df.empty else 0
+        st.metric("🚀 Product", product_count)
+
+    with col4:
+        active_count = (
+            len(df[df["status"].isin(["started", "planned"])]) if not df.empty else 0
+        )
+        st.metric("⚡ Active", active_count)
+
+    with col5:
+        avg_importance = df["importance"].mean() if not df.empty else 0
+        st.metric("⭐ Avg Importance", f"{avg_importance:.0f}")
+
+
+# ============================================================================
+# TIMELINE COMPONENT (Simple and Working)
+# ============================================================================
+
+
+def render_timeline(df: pd.DataFrame, key_prefix: str) -> None:
+    """Render timeline visualization using px.timeline (Gantt-style)."""
+
+    if df.empty or df["event_date"].isna().all():
+        st.info("No events with dates to display on timeline.")
+        return
+
+    # Filter events with valid dates
+    chart_df = df[df["event_date"].notna()].copy()
+
+    if chart_df.empty:
+        st.info("No events with dates to display on timeline.")
+        return
+
+    # Category filter
+    available_categories = sorted(chart_df["category"].unique().tolist())
+    selected_categories = st.multiselect(
+        "📂 Filter by category",
+        options=available_categories,
+        default=available_categories,
+        key=f"{key_prefix}_timeline_categories",
+    )
+
+    if not selected_categories:
+        st.warning("Select at least one category to display.")
+        return
+
+    chart_df = chart_df[chart_df["category"].isin(selected_categories)]
+
+    # Sort by date
+    chart_df = chart_df.sort_values("event_date", ascending=False)
+
+    # Limit to avoid overloading
+    if len(chart_df) > TIMELINE_MAX_EVENTS:
+        st.caption(f"Showing top {TIMELINE_MAX_EVENTS} events out of {len(chart_df)}")
+        chart_df = chart_df.head(TIMELINE_MAX_EVENTS)
+
+    # Create proper start/end for Gantt
+    chart_df["Start"] = chart_df["event_date"]
+    chart_df["End"] = chart_df["event_date"] + pd.Timedelta(days=1)
+    chart_df["Task"] = chart_df["title"].str[:60]
+
+    # Create Gantt chart
+    fig = px.timeline(
+        chart_df,
+        x_start="Start",
+        x_end="End",
+        y="Task",
+        color="category",
+        color_discrete_map=CATEGORY_COLORS,
+        hover_data=["status", "importance", "confidence"],
+        title="📅 Events Timeline",
+    )
+
+    # Add TODAY marker
+    today = datetime.now(UTC)
+    fig.add_vline(
+        x=today.timestamp() * 1000,  # Convert to milliseconds for plotly
+        line_dash="dash",
+        line_color="red",
+        line_width=2,
+        annotation_text="TODAY",
+        annotation_position="top",
+    )
+
+    fig.update_layout(
+        height=max(400, len(chart_df) * 28),
+        xaxis_title="",
+        yaxis_title="",
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+    )
+
+    fig.update_yaxes(automargin=True, tickfont=dict(size=11))
+
+    st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_timeline")
+
+
+# ============================================================================
+# CALENDAR VIEW COMPONENT
+# ============================================================================
+
+
+def render_calendar_view(df: pd.DataFrame, key_prefix: str) -> None:
+    """Render calendar view similar to Google Calendar."""
+
+    if df.empty or df["event_date"].isna().all():
+        st.info("No events with dates to display.")
+        return
+
+    chart_df = df[df["event_date"].notna()].copy()
+
+    if chart_df.empty:
+        st.info("No events with dates to display.")
+        return
+
+    # Get date range
+    min_date = chart_df["event_date"].min()
+    max_date = chart_df["event_date"].max()
+
+    # Date navigation
+    col1, col2, col3 = st.columns([1, 2, 1])
+
+    with col2:
+        # Month selector
+        today = datetime.now(UTC)
+        available_months = pd.date_range(
+            start=min_date.replace(day=1),
+            end=max_date.replace(day=1) + pd.DateOffset(months=1),
+            freq="MS",
+        )
+        month_options = [d.strftime("%B %Y") for d in available_months]
+        current_month_str = today.strftime("%B %Y")
+        default_idx = (
+            month_options.index(current_month_str)
+            if current_month_str in month_options
+            else 0
+        )
+
+        selected_month = st.selectbox(
+            "📅 Select Month",
+            options=month_options,
+            index=default_idx,
+            key=f"{key_prefix}_calendar_month",
+        )
+
+    # Parse selected month
+    selected_date = pd.to_datetime(selected_month, format="%B %Y")
+    month_start = selected_date.replace(day=1, tzinfo=UTC)
+    month_end = (month_start + pd.DateOffset(months=1) - pd.Timedelta(days=1)).replace(
+        tzinfo=UTC
+    )
+
+    # Filter events for selected month
+    month_events = chart_df[
+        (chart_df["event_date"] >= month_start) & (chart_df["event_date"] <= month_end)
+    ]
+
+    # Create calendar grid
+    st.markdown("---")
+
+    # Day headers
+    days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    cols = st.columns(7)
+    for i, day in enumerate(days):
+        cols[i].markdown(f"**{day}**")
+
+    # Get first day of month and calculate offset
+    first_day = month_start
+    first_weekday = first_day.weekday()  # Monday = 0
+
+    # Calculate total days in month
+    days_in_month = (month_end - month_start).days + 1
+
+    # Create weeks
+    current_day = 1
+    week_num = 0
+
+    while current_day <= days_in_month:
+        cols = st.columns(7)
+
+        for weekday in range(7):
+            # Skip days before month starts
+            if week_num == 0 and weekday < first_weekday:
+                cols[weekday].write("")
+                continue
+
+            if current_day > days_in_month:
+                cols[weekday].write("")
+                continue
+
+            # Current date
+            current_date = month_start + pd.Timedelta(days=current_day - 1)
+
+            # Get events for this day
+            day_events = month_events[
+                month_events["event_date"].dt.date == current_date.date()
+            ]
+
+            # Build day cell content
+            is_today = current_date.date() == today.date()
+            day_style = "🔴 " if is_today else ""
+
+            with cols[weekday]:
+                # Day number
+                if is_today:
+                    st.markdown(f"**{day_style}{current_day}**")
+                else:
+                    st.markdown(f"**{current_day}**")
+
+                # Events for this day
+                for _, event in day_events.iterrows():
+                    cat_emoji = {
+                        "product": "🚀",
+                        "risk": "🚨",
+                        "process": "⚙️",
+                        "marketing": "📣",
+                        "org": "👥",
+                        "unknown": "❓",
+                    }.get(event["category"], "📌")
+
+                    # Truncate title for display
+                    title_short = (
+                        event["title"][:CALENDAR_TITLE_TRUNCATE_LENGTH] + "…"
+                        if len(event["title"]) > CALENDAR_TITLE_TRUNCATE_LENGTH
+                        else event["title"]
+                    )
+
+                    # Use native Streamlit popover
+                    with st.popover(
+                        f"{cat_emoji} {title_short}", use_container_width=True
+                    ):
+                        st.markdown(f"**{event['full_title']}**")
+                        st.caption(
+                            f"📂 {event['category'].title()} | 📊 {event['status'].title()}"
+                        )
+                        st.caption(
+                            f"⭐ Importance: {event['importance']} | 🎯 Confidence: {event['confidence']:.0%}"
+                        )
+                        st.markdown("---")
+                        summary = str(event["summary"] or "")
+                        if len(summary) > POPOVER_SUMMARY_PREVIEW_LENGTH:
+                            summary = summary[:POPOVER_SUMMARY_PREVIEW_LENGTH] + "..."
+                        st.write(summary)
+
+            current_day += 1
+
+        week_num += 1
+
+    # Legend
+    st.markdown("---")
+    legend_items = " | ".join(
+        [
+            f"{emoji} {cat.title()}"
+            for cat, emoji in {
+                "product": "🚀",
+                "risk": "🚨",
+                "process": "⚙️",
+                "marketing": "📣",
+                "org": "👥",
+            }.items()
+        ]
+    )
+    st.caption(f"Legend: {legend_items}")
+
+    # Summary
+    st.caption(f"📊 {len(month_events)} events in {selected_month}")
+
+
+# ============================================================================
+# EVENT LIST VIEW
+# ============================================================================
+
+
+def render_event_list(df: pd.DataFrame, key_prefix: str) -> None:
+    """Render events as a list grouped by date."""
+
+    if df.empty or df["event_date"].isna().all():
+        st.info("No events to display.")
+        return
+
+    chart_df = df[df["event_date"].notna()].copy()
+    chart_df = chart_df.sort_values("event_date", ascending=False)
+
+    # Group by date
+    chart_df["date_str"] = chart_df["event_date"].dt.strftime("%A, %B %d, %Y")
+
+    for date_str, group in chart_df.groupby("date_str", sort=False):
+        st.markdown(f"### 📅 {date_str}")
+
+        for _, event in group.iterrows():
+            cat_color = CATEGORY_COLORS.get(event["category"], "#95A5A6")
+            cat_emoji = {
+                "product": "🚀",
+                "risk": "🚨",
+                "process": "⚙️",
+                "marketing": "📣",
+                "org": "👥",
+                "unknown": "❓",
+            }.get(event["category"], "📌")
+
+            status_emoji = {
+                "planned": "📋",
+                "started": "▶️",
+                "completed": "✅",
+                "canceled": "❌",
+            }.get(event["status"], "📌")
+
+            with st.container():
+                st.markdown(
+                    f'<div style="background-color:{cat_color}15; '
+                    f"border-left:4px solid {cat_color}; "
+                    f'padding:10px 15px; margin:5px 0; border-radius:4px;">'
+                    f'<div style="font-size:16px; font-weight:600;">{cat_emoji} {event["full_title"]}</div>'
+                    f'<div style="font-size:13px; color:#888; margin-top:4px;">'
+                    f"{status_emoji} {event['status'].title()} | "
+                    f"⭐ {event['importance']} | "
+                    f"🎯 {event['confidence']:.0%}"
+                    f"</div>"
+                    f'<div style="font-size:12px; color:#666; margin-top:4px;">{event["summary"][:150]}...</div>'
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+        st.markdown("")
+
+
+# ============================================================================
+# CATEGORY DISTRIBUTION CHART
+# ============================================================================
+
+
+def render_category_chart(df: pd.DataFrame, key_prefix: str) -> None:
+    """Render category distribution pie chart."""
+
+    if df.empty:
+        return
+
+    category_counts = df["category"].value_counts()
+
+    fig = px.pie(
+        values=category_counts.values,
+        names=category_counts.index,
+        title="Distribution by Category",
+        color=category_counts.index,
+        color_discrete_map=CATEGORY_COLORS,
+        hole=0.4,
+    )
+
+    fig.update_layout(
+        height=300,
+        margin=dict(l=20, r=20, t=40, b=20),
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=-0.2),
+    )
+
+    st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_pie")
+
+
+def render_status_chart(df: pd.DataFrame, key_prefix: str) -> None:
+    """Render status distribution bar chart."""
+
+    if df.empty:
+        return
+
+    status_counts = df["status"].value_counts()
+
+    fig = px.bar(
+        x=status_counts.values,
+        y=status_counts.index,
+        orientation="h",
+        title="Distribution by Status",
+        color=status_counts.index,
+        color_discrete_map=STATUS_COLORS,
+    )
+
+    fig.update_layout(
+        height=300,
+        margin=dict(l=20, r=20, t=40, b=20),
+        showlegend=False,
+        xaxis_title="Count",
+        yaxis_title="",
+    )
+
+    st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_bar")
+
+
+# ============================================================================
+# SOURCE TABS
+# ============================================================================
+
+
+def render_source_tab(
+    source_id: str, source_name: str, source_emoji: str, description: str
+) -> None:
+    """Render complete tab for a single source."""
+
+    st.markdown(f"### {source_emoji} {source_name}")
+    st.caption(description)
+
+    # Fetch data
+    df = fetch_events_by_source(source_id)
+
+    if df.empty:
+        st.warning(f"No events found from {source_name}.")
+        return
+
+    # Metrics row
+    render_metrics(df, source_name)
+
+    st.divider()
+
+    # Filters
+    st.markdown("#### 🎛️ Filters")
+    filtered_df = render_filters(df, key_prefix=source_id)
+
+    st.divider()
+
+    # Sub-tabs for table and visualizations
+    tab_table, tab_timeline, tab_calendar, tab_list, tab_analytics = st.tabs(
+        ["📋 Table", "📊 Timeline", "📅 Calendar", "📝 List", "📈 Analytics"]
+    )
+
+    with tab_table:
+        render_events_table(filtered_df, key_prefix=source_id)
+
+    with tab_timeline:
+        render_timeline(filtered_df, key_prefix=source_id)
+
+    with tab_calendar:
+        render_calendar_view(filtered_df, key_prefix=source_id)
+
+    with tab_list:
+        render_event_list(filtered_df, key_prefix=source_id)
+
+    with tab_analytics:
+        col1, col2 = st.columns(2)
+        with col1:
+            render_category_chart(filtered_df, key_prefix=source_id)
+        with col2:
+            render_status_chart(filtered_df, key_prefix=source_id)
+
+
+# ============================================================================
+# MAIN APPLICATION
+# ============================================================================
 
 
 def main():
-    """Main application function."""
+    """Main application entry point."""
 
-    ensure_metrics_exporter()
-    _ensure_session_defaults()
-    user_id = _require_auth()
+    # Page configuration
+    st.set_page_config(
+        page_title="Event Manager",
+        page_icon="📅",
+        layout="wide",
+        initial_sidebar_state="collapsed",
+    )
+
+    # Custom CSS
+    st.markdown(
+        """
+    <style>
+    .main-header {
+        font-size: 2rem;
+        font-weight: bold;
+        color: #1f77b4;
+        margin-bottom: 0.5rem;
+    }
+    .source-header {
+        font-size: 1.5rem;
+        margin-top: 1rem;
+    }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 2rem;
+    }
+    .stTabs [data-baseweb="tab"] {
+        font-size: 1.1rem;
+        font-weight: 500;
+    }
+
+    /* Tooltip styles for calendar events */
+    .event-item {
+        position: relative;
+        background-color: rgba(46, 204, 113, 0.125);
+        border-left: 3px solid;
+        padding: 2px 4px;
+        margin: 1px 0;
+        font-size: 11px;
+        border-radius: 2px;
+        overflow: hidden;
+        white-space: nowrap;
+        cursor: pointer;
+    }
+
+    .event-item .tooltip-text {
+        visibility: hidden;
+        position: absolute;
+        z-index: 1000;
+        bottom: 125%;
+        left: 50%;
+        transform: translateX(-50%);
+        background-color: rgba(0, 0, 0, 0.95);
+        color: #fff;
+        padding: 8px 12px;
+        border-radius: 6px;
+        font-size: 12px;
+        white-space: normal;
+        width: 280px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        line-height: 1.4;
+    }
+
+    .event-item .tooltip-text::after {
+        content: "";
+        position: absolute;
+        top: 100%;
+        left: 50%;
+        margin-left: -5px;
+        border-width: 5px;
+        border-style: solid;
+        border-color: rgba(0, 0, 0, 0.95) transparent transparent transparent;
+    }
+
+    .event-item:hover .tooltip-text {
+        visibility: visible;
+        opacity: 1;
+    }
+    </style>
+    """,
+        unsafe_allow_html=True,
+    )
 
     # Header
     st.markdown(
-        '<h1 class="main-header">📅 Slack Event Manager</h1>', unsafe_allow_html=True
+        '<h1 class="main-header">📅 Event Manager Dashboard</h1>',
+        unsafe_allow_html=True,
     )
-    st.markdown(
-        "Visual interface for processing Slack messages and extracting structured events."
-    )
+    st.caption("Centralized view of internal (Slack) and external (Telegram) events")
 
-    # Sidebar configuration
+    # Sidebar with system info
     with st.sidebar:
-        st.header("⚙️ Configuration")
+        st.header("ℹ️ System Info")
 
-        # Load settings
         settings = get_settings()
 
-        # Basic settings
-        message_limit = st.slider(
-            "Message Limit",
-            min_value=5,
-            max_value=100,
-            value=20,
-            help="Number of recent messages to fetch from each channel",
-        )
-
-        # Channel selection from config
-        # Create mapping: channel_name -> channel_id
-        channel_options = {
-            f"{ch.channel_name} ({ch.channel_id})": ch.channel_id
-            for ch in settings.slack_channels
-        }
-
-        # Use channel names as display options
-        selected_channel_names = st.multiselect(
-            "Channels",
-            options=list(channel_options.keys()),
-            default=list(channel_options.keys()),  # All channels by default
-            help="Select Slack channels to process",
-        )
-
-        # Convert back to channel IDs
-        channels = [channel_options[name] for name in selected_channel_names]
-
-        # Show database info
+        # Database info
         if settings.database_type == "postgres":
-            st.info(
-                "🐘 PostgreSQL: "
-                f"{settings.postgres_user}@{settings.postgres_host}:"
-                f"{settings.postgres_port}/{settings.postgres_database}"
-            )
+            st.success(f"🐘 PostgreSQL: {settings.postgres_database}")
         else:
             st.info(f"📁 SQLite: {settings.db_path}")
 
-        # Run pipeline button
-        run_pipeline = st.button(
-            "🚀 Run Pipeline", type="primary", use_container_width=True
+        # Quick stats
+        st.divider()
+        st.subheader("📊 Quick Stats")
+
+        slack_df = fetch_events_by_source("slack")
+        telegram_df = fetch_events_by_source("telegram")
+
+        st.metric("Slack Events", len(slack_df))
+        st.metric("Telegram Events", len(telegram_df))
+        st.metric("Total Events", len(slack_df) + len(telegram_df))
+
+        # Refresh button
+        st.divider()
+        if st.button("🔄 Refresh Data", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+
+    # Main content - source tabs
+    tab_slack, tab_telegram, tab_all = st.tabs(
+        ["🏢 Internal Events (Slack)", "🌍 External Events (Telegram)", "📊 All Events"]
+    )
+
+    with tab_slack:
+        render_source_tab(
+            source_id="slack",
+            source_name="Internal Events",
+            source_emoji="🏢",
+            description="Events from internal Slack channels: releases, deployments, incidents, team updates",
         )
 
-        if run_pipeline:
-            try:
-                job_id = _submit_pipeline_job(message_limit, channels, user_id)
-                st.success(f"Pipeline job submitted (ID: {job_id[:8]}…)")
-            except RateLimitExceededError as exc:
-                st.error(str(exc))
-
-    active_job_id = st.session_state.get(SESSION_JOB_ID_KEY)
-    if active_job_id:
-        st.autorefresh(interval=POLL_INTERVAL_MS, key=f"poll_{active_job_id}")
-        _render_job_status(active_job_id)
-    else:
-        latest_result = st.session_state.get(SESSION_JOB_RESULT_KEY)
-        if isinstance(latest_result, dict):
-            _render_job_summary(latest_result)
-        elif st.session_state.get(SESSION_STATUS_MESSAGE_KEY):
-            st.info(st.session_state[SESSION_STATUS_MESSAGE_KEY])
-
-    show_database_inspection()
-
-
-def fetch_channel_messages(
-    slack_client: Any, *, channels: list[str], limit: int | None
-) -> list[tuple[str, dict[str, Any]]]:
-    """Fetch messages for each channel while preserving attribution."""
-
-    channel_messages: list[tuple[str, dict[str, Any]]] = []
-    for channel in channels:
-        messages = slack_client.fetch_messages(channel_id=channel, limit=limit)
-        channel_messages.extend((channel, message) for message in messages)
-    return channel_messages
-
-
-def show_pipeline_results():
-    """Show detailed results from the pipeline."""
-
-    st.header("📊 Pipeline Results")
-
-    # Database inspection using repository
-    try:
-        # Create tabs for different views
-        tab1, tab2, tab3, tab4 = st.tabs(
-            ["📨 Messages", "🎯 Candidates", "📝 Events", "📈 Timeline"]
+    with tab_telegram:
+        render_source_tab(
+            source_id="telegram",
+            source_name="External Events",
+            source_emoji="🌍",
+            description="Events from Telegram channels: market news, competitor updates, industry trends",
         )
 
-        with tab1:
-            show_messages_table()
+    with tab_all:
+        st.markdown("### 📊 All Events Combined")
+        st.caption("Overview of all events from both sources")
 
-        with tab2:
-            show_candidates_table()
+        # Combine both sources
+        slack_df = fetch_events_by_source("slack")
+        telegram_df = fetch_events_by_source("telegram")
 
-        with tab3:
-            show_events_table()
-
-        with tab4:
-            show_gantt_chart()
-
-    except Exception as e:
-        st.error(f"Error reading database: {str(e)}")
-
-
-def show_database_inspection():
-    """Show database inspection when pipeline hasn't been run."""
-
-    st.header("🔍 Database Inspection")
-
-    try:
-        # Use repository for inspection
-        show_pipeline_results()
-    except Exception as e:
-        st.error(f"Error reading database: {str(e)}")
-
-
-def show_messages_table():
-    """Display messages table."""
-
-    st.subheader("📨 Raw Messages")
-
-    try:
-        repo = get_repository()
-        settings = get_settings()
-
-        if settings.database_type == "postgres":
-            st.caption(
-                "🐘 Source: PostgreSQL ("
-                f"{settings.postgres_host}:{settings.postgres_port}/"
-                f"{settings.postgres_database})"
-            )
-        else:
-            st.caption(f"📁 Source: SQLite ({settings.db_path})")
-
-        messages = fetch_recent_messages(repository=repo, limit=100)
-
-        if not messages:
-            st.info("No messages found.")
+        if slack_df.empty and telegram_df.empty:
+            st.warning("No events found in any source.")
             return
 
-        # Convert to DataFrame
-        messages_data = []
-        for msg in messages:
-            messages_data.append(
-                {
-                    "message_id": msg.message_id,
-                    "text": msg.text[:MAX_MESSAGE_LENGTH] + "..."
-                    if len(msg.text) > MAX_MESSAGE_LENGTH
-                    else msg.text,
-                    "ts": msg.ts_dt,
-                    "user_real_name": msg.user_real_name or "",
-                    "user_email": msg.user_email or "",
-                    "total_reactions": msg.total_reactions or 0,
-                    "reply_count": msg.reply_count or 0,
-                    "attachments_count": msg.attachments_count or 0,
-                    "files_count": msg.files_count or 0,
-                    "permalink": msg.permalink or "",
-                    "edited_ts": msg.edited_ts,
-                    "edited": msg.edited_ts is not None,
-                }
-            )
+        combined_df = pd.concat([slack_df, telegram_df], ignore_index=True)
 
-        messages_df = pd.DataFrame(messages_data)
-
-        if messages_df.empty:
-            st.info("No messages found.")
-            return
-
-        st.dataframe(
-            messages_df,
-            use_container_width=True,
-            column_config={
-                "message_id": st.column_config.TextColumn("Message ID", width="medium"),
-                "text": st.column_config.TextColumn("Text", width="large"),
-                "ts": st.column_config.DatetimeColumn(
-                    "Timestamp", format="YYYY-MM-DD HH:mm:ss"
-                ),
-                "user_real_name": st.column_config.TextColumn("User", width="medium"),
-                "user_email": st.column_config.TextColumn("Email", width="medium"),
-                "total_reactions": st.column_config.NumberColumn(
-                    "👍 Reactions", width="small"
-                ),
-                "reply_count": st.column_config.NumberColumn(
-                    "💬 Replies", width="small"
-                ),
-                "attachments_count": st.column_config.NumberColumn(
-                    "📎 Files", width="small"
-                ),
-                "files_count": st.column_config.NumberColumn("📄 Docs", width="small"),
-                "permalink": st.column_config.LinkColumn("🔗 Link", width="small"),
-                "edited": st.column_config.CheckboxColumn("✏️ Edited", width="small"),
-            },
-            hide_index=True,
-        )
-
-        # Show summary statistics
-        col1, col2, col3, col4 = st.columns(4)
+        # Metrics
+        col1, col2, col3, col4, col5 = st.columns(5)
         with col1:
-            st.metric("Total Messages", len(messages_df))
+            st.metric("📊 Total", len(combined_df))
         with col2:
-            st.metric("Total Reactions", int(messages_df["total_reactions"].sum()))
+            st.metric("🏢 Slack", len(slack_df))
         with col3:
-            st.metric("Total Replies", int(messages_df["reply_count"].sum()))
+            st.metric("🌍 Telegram", len(telegram_df))
         with col4:
-            edited_count = (
-                messages_df["edited_ts"].notna().sum()
-                if "edited_ts" in messages_df.columns
-                else 0
-            )
-            st.metric("Edited Messages", int(edited_count))
+            risk_count = len(combined_df[combined_df["category"] == "risk"])
+            st.metric("🚨 Risks", risk_count)
+        with col5:
+            avg_imp = combined_df["importance"].mean() if not combined_df.empty else 0
+            st.metric("⭐ Avg Importance", f"{avg_imp:.0f}")
 
-    except Exception as e:
-        st.error(f"Error loading messages: {str(e)}")
+        st.divider()
 
+        # Filters
+        st.markdown("#### 🎛️ Filters")
+        filtered_df = render_filters(combined_df, key_prefix="all")
 
-def show_candidates_table():
-    """Display candidates table."""
+        st.divider()
 
-    st.subheader("🎯 Event Candidates")
-
-    try:
-        repo = get_repository()
-        candidates = fetch_recent_candidates(repository=repo, limit=100)
-
-        if not candidates:
-            st.info("No candidates found.")
-            return
-
-        # Convert to DataFrame
-        candidates_data = []
-        for cand in candidates:
-            candidates_data.append(
-                {
-                    "message_id": cand.message_id,
-                    "text_norm": cand.text_norm[:MAX_CANDIDATE_TEXT_LENGTH] + "..."
-                    if len(cand.text_norm) > MAX_CANDIDATE_TEXT_LENGTH
-                    else cand.text_norm,
-                    "score": cand.score,
-                    "status": cand.status.value,
-                    "features_json": str(
-                        cand.features.model_dump() if cand.features else {}
-                    ),
-                }
-            )
-
-        candidates_df = pd.DataFrame(candidates_data)
-
-        if candidates_df.empty:
-            st.info("No candidates found.")
-            return
-
-        st.dataframe(
-            candidates_df,
-            use_container_width=True,
-            column_config={
-                "message_id": st.column_config.TextColumn("Message ID", width="medium"),
-                "text_norm": st.column_config.TextColumn("Text", width="large"),
-                "score": st.column_config.NumberColumn("Score", format="%.2f"),
-                "status": st.column_config.TextColumn("Status", width="small"),
-                "features_json": st.column_config.TextColumn(
-                    "Features", width="medium"
-                ),
-            },
+        # Content tabs
+        tab_table, tab_timeline, tab_calendar, tab_list, tab_analytics = st.tabs(
+            ["📋 Table", "📊 Timeline", "📅 Calendar", "📝 List", "📈 Analytics"]
         )
 
-        st.caption(f"Total candidates: {len(candidates_df)}")
+        with tab_table:
+            render_events_table(filtered_df, key_prefix="all")
 
-    except Exception as e:
-        st.error(f"Error loading candidates: {str(e)}")
+        with tab_timeline:
+            render_timeline(filtered_df, key_prefix="all")
 
+        with tab_calendar:
+            render_calendar_view(filtered_df, key_prefix="all")
 
-def show_events_table():
-    """Display events table."""
+        with tab_list:
+            render_event_list(filtered_df, key_prefix="all")
 
-    st.subheader("📝 Extracted Events")
-
-    try:
-        repo = get_repository()
-        events = fetch_recent_events(repository=repo, limit=100)
-
-        if not events:
-            st.info("No events found.")
-            return
-
-        # Convert to DataFrame with new event structure
-        events_data = []
-        for evt in events:
-            events_data.append(
-                {
-                    "event_id": evt.event_id,
-                    "message_id": evt.message_id,
-                    "title": evt.title,  # Property that renders from slots
-                    "category": evt.category.value,
-                    "status": evt.status.value,
-                    "event_date": evt.event_date,  # Property that returns first non-None time
-                    "confidence": evt.confidence,
-                    "importance": evt.importance,
-                    "cluster_key": evt.cluster_key,
-                    "dedup_key": evt.dedup_key or "",
-                }
-            )
-
-        events_df = pd.DataFrame(events_data)
-
-        if events_df.empty:
-            st.info("No events found.")
-            return
-
-        st.dataframe(
-            events_df,
-            use_container_width=True,
-            column_config={
-                "event_id": st.column_config.TextColumn("Event ID", width="medium"),
-                "title": st.column_config.TextColumn("Title", width="large"),
-                "category": st.column_config.TextColumn("Category", width="small"),
-                "status": st.column_config.TextColumn("Status", width="small"),
-                "event_date": st.column_config.DatetimeColumn(
-                    "Date", format="YYYY-MM-DD HH:mm"
-                ),
-                "confidence": st.column_config.NumberColumn(
-                    "Confidence", format="%.2f"
-                ),
-                "importance": st.column_config.NumberColumn(
-                    "Importance", width="small"
-                ),
-                "message_id": st.column_config.TextColumn(
-                    "Source Message", width="medium"
-                ),
-                "cluster_key": st.column_config.TextColumn(
-                    "Cluster Key", width="small"
-                ),
-                "dedup_key": st.column_config.TextColumn("Dedup Key", width="small"),
-            },
-            hide_index=True,
-        )
-
-        st.caption(f"Total events: {len(events_df)}")
-
-    except Exception as e:
-        st.error(f"Error loading events: {str(e)}")
-
-
-def show_gantt_chart():
-    """Display Gantt chart visualization."""
-
-    st.subheader("📈 Events Timeline (Gantt Chart)")
-
-    try:
-        # Get repository and fetch events with dates
-        repo = get_repository()
-
-        start_date = datetime.now(UTC) - timedelta(days=90)
-        end_date = datetime.now(UTC) + timedelta(days=365)
-        events = repo.get_events_in_window(start_date, end_date)
-
-        if not events:
-            st.info("No events with dates found for timeline.")
-            return
-
-        # Convert to DataFrame - only events with dates
-        events_data = []
-        for evt in events:
-            if evt.event_date:
-                events_data.append(
-                    {
-                        "title": evt.title,  # Property that renders from slots
-                        "category": evt.category.value,
-                        "event_date": evt.event_date,  # Property that returns first non-None time
-                    }
-                )
-
-        events_df = pd.DataFrame(events_data)
-
-        if events_df.empty:
-            st.info("No events with dates found for timeline.")
-            return
-
-        # Create Gantt chart
-        fig = px.timeline(
-            events_df,
-            x_start=events_df["event_date"],
-            x_end=events_df["event_date"] + pd.Timedelta(days=1),  # Events span 1 day
-            y="title",
-            color="category",
-            title="Events Timeline",
-            labels={"event_date": "Date"},
-            color_discrete_sequence=px.colors.qualitative.Set3,
-        )
-
-        # Update layout
-        fig.update_layout(
-            xaxis_title="Timeline",
-            yaxis_title="Events",
-            showlegend=True,
-            height=max(
-                400, len(events_df) * 30
-            ),  # Dynamic height based on number of events
-        )
-
-        # Update y-axis to show full titles
-        fig.update_yaxes(automargin=True)
-
-        st.plotly_chart(fig, use_container_width=True)
-
-        # Summary stats
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Total Events", len(events_df))
-        with col2:
-            st.metric("Categories", events_df["category"].nunique())
-        with col3:
-            date_range = (
-                events_df["event_date"].max() - events_df["event_date"].min()
-            ).days
-            st.metric("Date Range", f"{date_range} days")
-
-    except Exception as e:
-        st.error(f"Error creating Gantt chart: {str(e)}")
+        with tab_analytics:
+            col1, col2 = st.columns(2)
+            with col1:
+                render_category_chart(filtered_df, key_prefix="all")
+            with col2:
+                render_status_chart(filtered_df, key_prefix="all")
 
 
 if __name__ == "__main__":

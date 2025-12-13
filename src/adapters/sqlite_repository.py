@@ -219,6 +219,7 @@ class SQLiteRepository:
                 message_id TEXT NOT NULL,
                 source_channels TEXT NOT NULL,
                 extracted_at TEXT NOT NULL,
+                message_published_at TEXT,
 
                 -- Title Slots (source of truth)
                 action TEXT NOT NULL,
@@ -264,6 +265,12 @@ class SQLiteRepository:
             )
         """
         )
+
+        try:
+            cursor.execute("ALTER TABLE events ADD COLUMN message_published_at TEXT")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
 
         # Event relations table
         cursor.execute(
@@ -1186,9 +1193,9 @@ class SQLiteRepository:
             cursor.execute(
                 """
                 SELECT * FROM events
-                WHERE COALESCE(actual_start, actual_end, planned_start, planned_end) >= ?
-                  AND COALESCE(actual_start, actual_end, planned_start, planned_end) <= ?
-                ORDER BY COALESCE(actual_start, actual_end, planned_start, planned_end) ASC
+                WHERE COALESCE(actual_start, actual_end, planned_start, planned_end, message_published_at, extracted_at) >= ?
+                  AND COALESCE(actual_start, actual_end, planned_start, planned_end, message_published_at, extracted_at) <= ?
+                ORDER BY COALESCE(actual_start, actual_end, planned_start, planned_end, message_published_at, extracted_at) ASC
                 """,
                 (start_dt.isoformat(), end_dt.isoformat()),
             )
@@ -1669,6 +1676,9 @@ class SQLiteRepository:
             message_id=row["message_id"],
             source_channels=json.loads(row["source_channels"] or "[]"),
             extracted_at=extracted_at,
+            message_published_at=_parse_dt(row["message_published_at"])
+            if "message_published_at" in row.keys()
+            else None,
             # Title slots
             action=ActionType(row["action"]),
             object_id=row["object_id"],

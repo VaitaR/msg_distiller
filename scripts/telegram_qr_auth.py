@@ -86,9 +86,9 @@ async def authenticate_with_qr() -> None:
         print(f"❌ Error: TELEGRAM_API_ID must be an integer, got: {api_id_str}")
         sys.exit(1)
 
-    # Session file path
-    session_path = "data/telegram_session.session"
-    Path("data").mkdir(exist_ok=True)
+    # Session file path (can be overridden via TELEGRAM_SESSION_PATH env)
+    session_path = os.getenv("TELEGRAM_SESSION_PATH", "data/telegram_session.session")
+    Path(Path(session_path).parent).mkdir(exist_ok=True)
 
     print("=" * 60)
     print("Telegram QR Code Authentication")

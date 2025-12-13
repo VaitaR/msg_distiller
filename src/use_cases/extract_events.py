@@ -259,6 +259,7 @@ def convert_llm_event_to_domain(
         message_id=message_id,
         source_channels=[channel_name] if channel_name else [],
         source_id=source_id,
+        message_published_at=_normalize_to_utc(message_ts_dt),
         # Title slots
         action=action,
         object_id=object_id,
