@@ -30,8 +30,9 @@ jobs:
 
       - name: Install pre-commit and dependencies
         run: |
-          uv pip install --python $(which python) -r requirements-dev.txt
+          uv lock --check
+          uv sync --python $(which python) --frozen --no-install-project
 
       - name: Run pre-commit hooks (fastest feedback)
         run: |
-          pre-commit run --all-files --show-diff-on-failure
+          uv run pre-commit run --all-files --show-diff-on-failure

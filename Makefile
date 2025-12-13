@@ -1,4 +1,4 @@
-.PHONY: help install format lint typecheck test ci clean makefile
+.PHONY: help install install-pip sync sync-dev lock lock-check format lint typecheck test ci clean makefile
 
 # Colors for output
 BLUE := \033[0;34m
@@ -6,19 +6,39 @@ GREEN := \033[0;32m
 YELLOW := \033[0;33m
 RED := \033[0;31m
 NC := \033[0m # No Color
+UV_PYTHON ?= python3.11
 
 help: ## Show this help message
 	@echo "$(BLUE)Available targets:$(NC)"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-15s$(NC) %s\n", $$1, $$2}'
 
-install: ## Install dependencies
-	@echo "$(BLUE)Installing dependencies...$(NC)"
+install: ## Install dependencies (uv, recommended)
+	@make sync-dev
+
+install-pip: ## Install dependencies (legacy pip)
+	@echo "$(BLUE)Installing dependencies with pip (legacy)...$(NC)"
 	pip install -r requirements.txt
+
+sync: ## Sync runtime deps from uv.lock (frozen)
+	@echo "$(BLUE)Syncing runtime dependencies (uv, frozen)...$(NC)"
+	@uv sync --python "$(UV_PYTHON)" --frozen --no-dev --no-install-project && echo "$(GREEN)✓ Sync complete$(NC)" || (echo "$(RED)✗ Sync failed$(NC)" && exit 1)
+
+sync-dev: ## Sync dev deps from uv.lock (frozen)
+	@echo "$(BLUE)Syncing development dependencies (uv, frozen)...$(NC)"
+	@uv sync --python "$(UV_PYTHON)" --frozen --no-install-project && echo "$(GREEN)✓ Sync complete$(NC)" || (echo "$(RED)✗ Sync failed$(NC)" && exit 1)
+
+lock: ## Update uv.lock from pyproject.toml
+	@echo "$(BLUE)Updating uv.lock...$(NC)"
+	@uv lock --python "$(UV_PYTHON)" && echo "$(GREEN)✓ Lock updated$(NC)" || (echo "$(RED)✗ Lock update failed$(NC)" && exit 1)
+
+lock-check: ## Check uv.lock is up-to-date
+	@echo "$(BLUE)Checking uv.lock is up-to-date...$(NC)"
+	@uv lock --check && echo "$(GREEN)✓ Lock is up-to-date$(NC)" || (echo "$(RED)✗ Lock is out-of-date$(NC)" && exit 1)
 
 deps-check: ## Check dependency resolution (uv dry-run, matches CI)
 	@echo "$(BLUE)Checking dependency resolution with uv...$(NC)"
 	@if command -v uv >/dev/null 2>&1; then \
-		uv pip install --dry-run --python "$$(which python)" -r requirements-dev.txt >/dev/null && \
+		uv lock --check >/dev/null && \
 		echo "$(GREEN)✓ Dependency resolution OK$(NC)"; \
 	else \
 		echo "$(YELLOW)WARN: uv not found; skipping deps-check (CI uses uv)$(NC)"; \
@@ -26,37 +46,37 @@ deps-check: ## Check dependency resolution (uv dry-run, matches CI)
 
 format: ## Format code with ruff
 	@echo "$(BLUE)Formatting code with ruff...$(NC)"
-	ruff format .
+	uv run ruff format .
 	@echo "$(GREEN)✓ Formatting complete$(NC)"
 
 format-check: ## Check code formatting without modifying files
 	@echo "$(BLUE)Checking code formatting...$(NC)"
-	@ruff format --check . && echo "$(GREEN)✓ Format check passed$(NC)" || (echo "$(RED)✗ Format check failed$(NC)" && exit 1)
+	@uv run ruff format --check . && echo "$(GREEN)✓ Format check passed$(NC)" || (echo "$(RED)✗ Format check failed$(NC)" && exit 1)
 
 lint: ## Run ruff linter
 	@echo "$(BLUE)Running ruff linter...$(NC)"
-	@ruff check . && echo "$(GREEN)✓ Lint passed$(NC)" || (echo "$(RED)✗ Lint failed$(NC)" && exit 1)
+	@uv run ruff check . && echo "$(GREEN)✓ Lint passed$(NC)" || (echo "$(RED)✗ Lint failed$(NC)" && exit 1)
 
 lint-fix: ## Run ruff linter with auto-fix
 	@echo "$(BLUE)Running ruff linter with auto-fix...$(NC)"
-	ruff check . --fix --unsafe-fixes
+	uv run ruff check . --fix --unsafe-fixes
 	@echo "$(GREEN)✓ Lint fixes applied$(NC)"
 
 typecheck: ## Run mypy type checker (matches CI exactly)
 	@echo "$(BLUE)Running mypy type checker...$(NC)"
-	@mypy src --config-file pyproject.toml && echo "$(GREEN)✓ Type check passed$(NC)" || (echo "$(RED)✗ Type check failed$(NC)" && exit 1)
+	@uv run mypy src --config-file pyproject.toml && echo "$(GREEN)✓ Type check passed$(NC)" || (echo "$(RED)✗ Type check failed$(NC)" && exit 1)
 
 test: ## Run tests with pytest (matches CI exactly)
 	@echo "$(BLUE)Running tests...$(NC)"
-	@SLACK_BOT_TOKEN=dummy OPENAI_API_KEY=dummy python -m pytest -k "not (test_postgres_repository or telegram)" && echo "$(GREEN)✓ Tests passed$(NC)" || (echo "$(RED)✗ Tests failed$(NC)" && exit 1)
+	@SLACK_BOT_TOKEN=dummy OPENAI_API_KEY=dummy uv run python -m pytest -k "not (test_postgres_repository or telegram)" && echo "$(GREEN)✓ Tests passed$(NC)" || (echo "$(RED)✗ Tests failed$(NC)" && exit 1)
 
 test-quick: ## Run tests without coverage
 	@echo "$(BLUE)Running quick tests...$(NC)"
-	@SLACK_BOT_TOKEN=dummy OPENAI_API_KEY=dummy pytest -q --no-cov && echo "$(GREEN)✓ Tests passed$(NC)" || (echo "$(RED)✗ Tests failed$(NC)" && exit 1)
+	@SLACK_BOT_TOKEN=dummy OPENAI_API_KEY=dummy uv run pytest -q --no-cov && echo "$(GREEN)✓ Tests passed$(NC)" || (echo "$(RED)✗ Tests failed$(NC)" && exit 1)
 
 test-cov: ## Run tests with coverage report
 	@echo "$(BLUE)Running tests with coverage...$(NC)"
-	@SLACK_BOT_TOKEN=dummy OPENAI_API_KEY=dummy pytest --cov=src --cov-report=term-missing --cov-report=html && echo "$(GREEN)✓ Tests passed with coverage$(NC)" || (echo "$(RED)✗ Tests failed$(NC)" && exit 1)
+	@SLACK_BOT_TOKEN=dummy OPENAI_API_KEY=dummy uv run pytest --cov=src --cov-report=term-missing --cov-report=html && echo "$(GREEN)✓ Tests passed with coverage$(NC)" || (echo "$(RED)✗ Tests failed$(NC)" && exit 1)
 
 test-postgres: ## Run PostgreSQL tests (requires PostgreSQL running and TEST_POSTGRES=1)
 	@echo "$(BLUE)Running PostgreSQL tests...$(NC)"
@@ -70,7 +90,7 @@ test-postgres: ## Run PostgreSQL tests (requires PostgreSQL running and TEST_POS
 		echo "$(YELLOW)Set TEST_POSTGRES=1 to run PostgreSQL tests$(NC)"; \
 		exit 1; \
 	fi
-	@SLACK_BOT_TOKEN=dummy OPENAI_API_KEY=dummy pytest tests/test_postgres_repository.py -v && echo "$(GREEN)✓ PostgreSQL tests passed$(NC)" || (echo "$(RED)✗ PostgreSQL tests failed$(NC)" && exit 1)
+	@SLACK_BOT_TOKEN=dummy OPENAI_API_KEY=dummy uv run pytest tests/test_postgres_repository.py -v && echo "$(GREEN)✓ PostgreSQL tests passed$(NC)" || (echo "$(RED)✗ PostgreSQL tests failed$(NC)" && exit 1)
 
 
 clean: ## Clean up generated files
@@ -88,11 +108,11 @@ clean: ## Clean up generated files
 
 pre-commit: ## Run pre-commit hooks (fastest feedback)
 	@echo "$(BLUE)Running pre-commit hooks...$(NC)"
-	@pre-commit run --all-files --show-diff-on-failure && echo "$(GREEN)✓ Pre-commit checks passed!$(NC)" || (echo "$(RED)✗ Pre-commit failed$(NC)" && exit 1)
+	@uv run pre-commit run --all-files --show-diff-on-failure && echo "$(GREEN)✓ Pre-commit checks passed!$(NC)" || (echo "$(RED)✗ Pre-commit failed$(NC)" && exit 1)
 
 pre-commit-install: ## Install pre-commit hooks
 	@echo "$(BLUE)Installing pre-commit hooks...$(NC)"
-	@pre-commit install && echo "$(GREEN)✓ Pre-commit hooks installed$(NC)"
+	@uv run pre-commit install && echo "$(GREEN)✓ Pre-commit hooks installed$(NC)"
 
 pre-push: ## Run pre-push checks (matches CI exactly)
 	@echo "$(BLUE)Running pre-push checks...$(NC)"
@@ -110,22 +130,25 @@ ci-local: ## Run CI checks locally (same as GitHub Actions)
 	@echo "$(BLUE)   Running CI Pipeline (Local)$(NC)"
 	@echo "$(BLUE)===========================================$(NC)"
 	@echo ""
-	@echo "$(YELLOW)Step 0/6: Dependency Resolution$(NC)"
-	@make deps-check
+	@echo "$(YELLOW)Step 0/7: Lock Check$(NC)"
+	@make lock-check
 	@echo ""
-	@echo "$(YELLOW)Step 1/6: Pre-commit (auto-fix)$(NC)"
+	@echo "$(YELLOW)Step 1/7: Sync Dependencies (frozen)$(NC)"
+	@make sync-dev
+	@echo ""
+	@echo "$(YELLOW)Step 2/7: Pre-commit (auto-fix)$(NC)"
 	@make pre-commit
 	@echo ""
-	@echo "$(YELLOW)Step 2/6: Format Check$(NC)"
+	@echo "$(YELLOW)Step 3/7: Format Check$(NC)"
 	@make format-check
 	@echo ""
-	@echo "$(YELLOW)Step 3/6: Lint$(NC)"
+	@echo "$(YELLOW)Step 4/7: Lint$(NC)"
 	@make lint
 	@echo ""
-	@echo "$(YELLOW)Step 4/6: Type Check$(NC)"
+	@echo "$(YELLOW)Step 5/7: Type Check$(NC)"
 	@make typecheck
 	@echo ""
-	@echo "$(YELLOW)Step 5/6: Tests$(NC)"
+	@echo "$(YELLOW)Step 6/7: Tests$(NC)"
 	@make test
 	@echo ""
 	@echo "$(GREEN)===========================================$(NC)"
@@ -134,7 +157,7 @@ ci-local: ## Run CI checks locally (same as GitHub Actions)
 
 dev-setup: ## Complete development environment setup
 	@echo "$(BLUE)Setting up development environment...$(NC)"
-	@make install
+	@make sync-dev
 	@make pre-commit-install
 	@echo "$(GREEN)✓ Development environment ready!$(NC)"
 	@echo "$(YELLOW)Quick commands:$(NC)"

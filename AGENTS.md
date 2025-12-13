@@ -42,8 +42,11 @@ Storage → Event Validation → Digest Publishing → Event Validation
 
 ### Installation
 ```bash
-# 1. Install Python dependencies
-pip install -r requirements.txt
+# 1. Install uv (one time)
+pip install uv
+
+# 2. Sync dependencies from lockfile (creates .venv)
+uv sync --frozen --no-install-project
 
 # 2. Set up configuration files (automated)
 ./scripts/setup_config.sh

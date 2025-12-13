@@ -4,16 +4,20 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y \
-    sqlite3 \
-    postgresql-client \
-    curl \
-    postgresql-client \
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y \
+        curl \
+        postgresql-client \
+        sqlite3 \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install Python dependencies
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+# Install uv and sync dependencies from lockfile (no project install)
+COPY pyproject.toml uv.lock ./
+RUN pip install --no-cache-dir uv==0.8.6 \
+    && uv sync --frozen --no-dev --no-install-project
+
+ENV PATH="/app/.venv/bin:$PATH"
 
 # Copy entire application
 COPY . .
