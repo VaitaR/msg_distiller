@@ -1,36 +1,89 @@
-# Configuration and Migrations
+# Configuration Guide
 
-## Environment precedence
+## Sources of Configuration
 
-`Settings` now loads configuration from YAML files and environment variables. Runtime
-environment variables always win over values defined in `config/*.yaml`. Use this when
-you need to override database credentials or swap between SQLite and PostgreSQL without
-changing committed YAML files.
+`Settings` loads and merges:
 
-Example:
+1. `config/main.yaml`
+2. Other `config/*.yaml` files (for example `channels.yaml`, `telegram_channels.yaml`, `object_registry.yaml`)
+3. Environment variables (`.env` and process env)
+
+Environment variables have highest priority and override YAML values.
+
+## Required Secrets
+
+Set in `.env`:
 
 ```bash
-export DATABASE_TYPE=postgres
-export POSTGRES_HOST=prod-db.internal
-export POSTGRES_PORT=5433
+SLACK_BOT_TOKEN=xoxb-...
+OPENAI_API_KEY=sk-...
 ```
 
-With those overrides in place, `Settings()` will connect to PostgreSQL even if the YAML
-configuration still lists `sqlite`.
+Optional Telegram integration:
 
-## Database migrations
+```bash
+TELEGRAM_API_ID=123456
+TELEGRAM_API_HASH=...
+```
 
-All schema changes are managed through Alembic.
+Optional PostgreSQL:
+
+```bash
+POSTGRES_PASSWORD=...
+```
+
+## Core Config Files
+
+- `config/main.yaml`: global settings (LLM, database, processing, dedup, digest, logging)
+- `config/channels.yaml`: Slack channel scoring settings
+- `config/telegram_channels.yaml`: Telegram channel scoring settings
+- `config/object_registry.yaml`: object canonicalization map
+
+Templates live in `config/defaults/*.example.yaml` and are copied by:
+
+```bash
+./scripts/setup_config.sh
+```
+
+## Multi-Source Model
+
+The system supports two sources:
+- `slack`
+- `telegram`
+
+`Settings` exposes `message_sources` and source-aware helpers (`get_source_config`, `get_enabled_sources`, `get_scoring_config`).
+
+If `message_sources` is not explicitly configured, legacy `channels` and `telegram_channels` configs are auto-migrated at runtime.
+
+## Database Selection
+
+Default is SQLite.
+
+To use PostgreSQL, set:
+
+```bash
+DATABASE_TYPE=postgres
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_DATABASE=slack_events
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=...
+```
+
+Run migrations:
 
 ```bash
 alembic upgrade head
 ```
 
-The upgrade path now includes:
+## Validation
 
-- Renaming `ingestion_state` to `slack_ingestion_state` and adding resume columns.
-- Adding `source_id` to `event_candidates` with a backfill for legacy rows.
-- Creating the `pipeline_tasks` queue table with supporting indexes.
+YAML sections are validated against JSON schemas in `config/schemas/` when schemas are present.
 
-The legacy `scripts/fix_postgres_schema.py` helper has been retired. Running the Alembic
-migration is sufficient for both fresh installs and upgrades.
+## Recommended Local Setup
+
+```bash
+make sync-dev
+./scripts/setup_config.sh
+python -c "from src.config.settings import get_settings; get_settings(); print('settings ok')"
+```

@@ -1,744 +1,205 @@
-# Slack Event Manager MVP
+# Slack Event Manager
 
-AI-powered event extraction and digest system for **Slack and Telegram** channels. Automatically processes messages to extract structured events, deduplicate them, and publish daily digests.
+Multi-source event extraction pipeline for **Slack** and **Telegram**.
 
-## Features
+The system ingests channel messages, scores candidates, extracts structured events with LLMs, deduplicates results, and optionally publishes a digest to Slack.
 
-- 🤖 **LLM-powered extraction**: Uses OpenAI GPT to extract 0-5 events per message
-- 📊 **Intelligent scoring**: Configurable per-channel scoring for candidate selection
-- 🔗 **Anchor detection**: Extracts Jira keys, GitHub issues, meeting links, document IDs
-- 📅 **Smart date resolution**: Handles absolute, relative dates, ranges, and timezones
-- 🔄 **Deduplication**: Merges similar events across messages with fuzzy matching
-- 💾 **Dual database**: PostgreSQL (production) or SQLite (development) with seamless switching
-- 💰 **Budget control**: Daily LLM cost tracking with graceful degradation
-- 🌍 **Multi-source**: Slack + Telegram with unified pipeline (Phase 7 ✅)
-- 📨 **Digest publishing**: Beautiful Slack Block Kit digests
-- 🐳 **Docker-ready**: Full Docker Compose setup with PostgreSQL, auto-migrations, and Streamlit UI
+## Current Architecture
 
-## Architecture
+### Sources
+- Slack (`MessageSource.SLACK`)
+- Telegram (`MessageSource.TELEGRAM`)
 
-Clean architecture with clear separation of concerns and enterprise patterns:
+### Pipeline Modes
+1. **Direct orchestrator (recommended for local/dev):**
+   - `scripts/run_multi_source_pipeline.py`
+   - Runs ingest -> candidates -> LLM extraction -> dedup in one process
+2. **Queue-based workers (recommended for production):**
+   - Scheduler + workers (`scripts/run_pipeline_scheduler.py`, `scripts/run_ingest_worker.py`, `scripts/run_extraction_worker.py`, `scripts/run_llm_worker.py`, `scripts/run_dedup_worker.py`)
 
-```
+### Key Design Points
+- Source-aware domain model (`source_id` on messages/candidates/events)
+- Source-aware repository methods for ingestion, candidate selection, extraction, and dedup
+- Per-source prompt configuration (`config/prompts/slack.yaml`, `config/prompts/telegram.yaml`)
+- SQLite and PostgreSQL support through repository factory
+
+## Repository Layout
+
+```text
 src/
-├── domain/              # Pure business logic
-│   ├── models.py       # Pydantic models
-│   ├── protocols.py    # Abstract interfaces
-│   ├── exceptions.py   # Custom exceptions
-│   ├── specifications.py         # Specification pattern (NEW)
-│   ├── deduplication_constants.py # Business rules
-│   └── scoring_constants.py      # Scoring limits
-├── services/           # Domain services
-│   ├── text_normalizer.py
-│   ├── link_extractor.py
-│   ├── date_resolver.py
-│   ├── scoring_engine.py
-│   └── deduplicator.py
-├── adapters/           # External integrations
-│   ├── slack_client.py
-│   ├── telegram_client.py        # Telegram adapter (NEW - Phase 7)
-│   ├── message_client_factory.py # Multi-source factory (NEW)
-│   ├── llm_client.py
-│   ├── sqlite_repository.py
-│   ├── postgres_repository.py    # PostgreSQL adapter (NEW)
-│   ├── repository_factory.py     # DB selection (NEW)
-│   └── query_builders.py         # Type-safe queries
-├── use_cases/          # Application orchestration
-│   ├── ingest_messages.py
-│   ├── ingest_telegram_messages.py  # Telegram ingestion (NEW - Phase 7)
-│   ├── build_candidates.py
-│   ├── extract_events.py
-│   ├── deduplicate_events.py
-│   └── publish_digest.py
-└── config/             # Settings management
-    └── settings.py
+  adapters/        # Slack/Telegram clients, repositories, factories
+  clients/         # Wrapped client interfaces
+  config/          # Settings + logging
+  domain/          # Models, protocols, business constants
+  observability/   # Metrics/tracing
+  ports/           # Task queue and job runner ports
+  presentation/    # Streamlit orchestration helpers
+  services/        # Scoring, dedup, normalization, object registry, etc.
+  use_cases/       # Ingest/extract/dedup/publish orchestration
+  workers/         # Task-queue workers
+scripts/           # CLI entry points and operational scripts
+config/defaults/   # Example YAML templates copied by setup script
 ```
 
-**Design Patterns:**
-- **Repository Pattern**: Abstract data access with dual SQLite/PostgreSQL support
-- **Factory Pattern**: Database selection based on configuration
-- **Specification Pattern**: Composable business rules with AND/OR/NOT logic
-- **Query Builder (Criteria)**: Type-safe database queries without string literals
-- **Use Case Pattern**: Clean orchestration of business logic
+## Requirements
 
-## Prerequisites
-
-- Python 3.11+
-- **Slack Bot Token** with permissions:
-  - `channels:read`, `channels:history`
-  - `users:read`, `reactions:read`
-  - `chat:write` (for digest posting)
-- **Telegram API Credentials** (optional, for Telegram integration):
-  - API ID and API hash from https://my.telegram.org
-  - Phone number for user client authentication
-- **OpenAI API Key**
+- Python `3.11+`
+- `uv`
+- Slack bot token (`SLACK_BOT_TOKEN`)
+- OpenAI API key (`OPENAI_API_KEY`)
+- Optional for Telegram:
+  - `TELEGRAM_API_ID`
+  - `TELEGRAM_API_HASH`
 
 ## Quick Start
 
-### 1. Installation
+### 1. Install
 
 ```bash
-# Clone repository
-cd /path/to/slack_event_manager
-
-# Install uv (one time)
+git clone https://github.com/VaitaR/slack-event-manager.git
+cd slack-event-manager
 pip install uv
-
-# Sync dependencies from lockfile (creates .venv)
-uv sync --frozen --no-install-project
+make sync-dev
 ```
 
-### 2. Configuration
+### 2. Generate Config Files
 
-**Automated Setup (Recommended):**
 ```bash
-# Run setup script - creates all config files from examples
 ./scripts/setup_config.sh
-
-# Edit files with your values
-# 1. .env - Add your API tokens
-# 2. config/main.yaml - Adjust settings (optional, uses good defaults)
-# 3. config/object_registry.yaml - Add your internal systems
-# 4. config/channels.yaml - Add your Slack channels
 ```
 
-**Manual Setup:**
-```bash
-# 1. Copy config files from examples
-cp config/defaults/*.example.yaml config/
+This creates local editable files from `config/defaults/*.example.yaml`:
+- `config/main.yaml`
+- `config/channels.yaml`
+- `config/object_registry.yaml`
+- `config/telegram_channels.yaml`
+- `.env`
 
-# 2. Create .env file
-cat > .env << 'EOF'
-SLACK_BOT_TOKEN=xoxb-your-token
-OPENAI_API_KEY=sk-your-key
+### 3. Fill Secrets
 
-# Optional: For Telegram integration
-TELEGRAM_API_ID=12345
-TELEGRAM_API_HASH=abc123...
-EOF
-
-# 3. Edit all files with your actual values
-# - config/main.yaml
-# - config/object_registry.yaml
-# - config/channels.yaml
-# - config/telegram_channels.yaml (if using Telegram)
-```
-
-**Configuration System:**
-- All `config/*.yaml` files are automatically loaded and merged
-- Validated against JSON schemas in `config/schemas/`
-- See [CONFIG.md](CONFIG.md) for detailed documentation
-
-**Example config structure:**
-```yaml
-llm:
-  model: gpt-5-nano
-  temperature: 1.0
-  timeout_seconds: 120
-  daily_budget_usd: 10.0
-
-database:
-  type: sqlite  # or postgres for production
-  path: data/slack_events.db  # for SQLite
-  postgres:  # for PostgreSQL
-    host: localhost
-    port: 5432
-    database: slack_events
-    user: postgres
-
-slack:
-  digest_channel_id: C789012
-
-processing:
-  tz_default: Europe/Amsterdam
-  threshold_score_default: 0.0
-
-deduplication:
-  date_window_hours: 48
-  title_similarity: 0.8
-
-logging:
-  level: INFO
-```
-
-**Note:**
-- `.env` contains ONLY secrets (never committed to git)
-- `config/*.yaml` files contain application settings (in `.gitignore`, created from `config/defaults/*.example.yaml`)
-- `config/defaults/*.example.yaml` are templates with example values (committed to git)
-
-### 3. Run Pipeline
+Edit `.env`:
 
 ```bash
-# Run complete pipeline (Slack only)
-python scripts/run_pipeline.py
+SLACK_BOT_TOKEN=xoxb-...
+OPENAI_API_KEY=sk-...
 
-# With optional digest publication
-python scripts/run_pipeline.py --publish
+# Optional Telegram
+TELEGRAM_API_ID=123456
+TELEGRAM_API_HASH=...
 
-# Dry run (don't post digest)
-python scripts/run_pipeline.py --publish --dry-run
+# Optional PostgreSQL
+POSTGRES_PASSWORD=...
 ```
 
-### 4. Telegram Integration (Optional)
+## Configuration Model
 
-**Setup:**
+Runtime config is loaded from `config/main.yaml` + other `config/*.yaml` files and merged.
+
+Important files:
+- `config/main.yaml` - global pipeline/db/llm/digest settings
+- `config/channels.yaml` - Slack scoring/channel config
+- `config/telegram_channels.yaml` - Telegram channel config
+- `config/object_registry.yaml` - canonical object mappings
+
+Detailed reference: [`docs/CONFIG.md`](docs/CONFIG.md)
+
+## Run Commands
+
+### Multi-source Pipeline
+
 ```bash
-# 1. Get API credentials from https://my.telegram.org
-# 2. Add to .env:
-#    TELEGRAM_API_ID=12345
-#    TELEGRAM_API_HASH=abc123...
+# Run all enabled sources once
+python scripts/run_multi_source_pipeline.py
 
-# 3. Run authentication (creates session file)
-python scripts/telegram_auth.py
+# Run only Slack
+python scripts/run_multi_source_pipeline.py --source slack
 
-# 4. Configure channels in config/telegram_channels.yaml
-```
-
-**Usage:**
-```bash
-# Test Telegram ingestion
-python scripts/test_telegram_ingestion.py
-
-# Run Telegram pipeline only
+# Run only Telegram
 python scripts/run_multi_source_pipeline.py --source telegram
 
-# Run both Slack and Telegram
-python scripts/run_multi_source_pipeline.py
+# Continuous mode
+python scripts/run_multi_source_pipeline.py --interval-seconds 3600
+
+# Publish digest
+python scripts/run_multi_source_pipeline.py --publish
+
+# Dry-run publish
+python scripts/run_multi_source_pipeline.py --publish --dry-run
 ```
 
-**See [docs/TELEGRAM_INTEGRATION.md](docs/TELEGRAM_INTEGRATION.md) for complete guide.**
-
-## Usage
-
-### Main Pipeline
-
-Process messages end-to-end:
+### Legacy Slack-only Pipeline
 
 ```bash
-python scripts/run_pipeline.py [OPTIONS]
-
-Options:
-  --publish              Publish digest after processing
-  --lookback-hours N     Hours to look back (default: from settings)
-  --skip-llm            Skip LLM extraction
-  --dry-run             Build but don't post digest
-```
-
-### Backfill Historical Data
-
-Process historical messages:
-
-```bash
-python scripts/backfill.py \
-  --start-date 2025-10-01 \
-  --end-date 2025-10-10 \
-  --budget-per-day 5.0
-```
-
-### Generate Digest
-
-Standalone digest generation:
-
-```bash
-python scripts/generate_digest.py [OPTIONS]
-
-Options:
-  --date DATE            Date (YYYY-MM-DD, "yesterday", "today")
-  --lookback-hours N     Hours to look back (default: 48)
-  --channel ID           Override target channel
-  --dry-run             Don't post to Slack
-```
-
-## Testing
-
-Unified testing workflow using Make:
-
-```bash
-# Run tests (fastest - no coverage)
-make test-quick
-
-# Run tests with coverage report
-make test-cov
-
-# Run specific test file
-python -m pytest tests/test_date_resolver.py -v
-
-# Run tests matching pattern
-python -m pytest tests/ -k "test_extract" -v
-
-# Full CI test run (matches GitHub Actions)
-make ci
-```
-
-Test coverage target: >90% for core services.
-
-**Development Testing Workflow:**
-```bash
-# During development (fast feedback)
-make pre-commit    # Format, lint, typecheck
-
-# Before committing
-make test-quick    # Run tests
-
-# Before pushing
-make ci           # Full CI check
-```
-
-## Demo & Testing
-
-### End-to-End Demo
-
-Run a complete demonstration with mock data:
-
-```bash
-# Basic demo with mock data
-python scripts/demo_e2e.py
-
-# Demo with custom time window
-python scripts/demo_e2e.py --hours 72
-
-# Try with real Slack API (requires valid tokens)
-python scripts/demo_e2e.py --real --channel C1234567890
-```
-
-The demo shows:
-- 📥 Message ingestion and processing
-- 🎯 Candidate scoring and filtering
-- 🤖 LLM event extraction
-- 🔗 Event deduplication
-- 📋 Beautiful terminal digest display
-
-**Development Testing:**
-```bash
-# Quick validation during development
-make pre-commit    # Format, lint, typecheck
-
-# Test with real data
-python scripts/test_with_real_data.py
-
-# Full pipeline test
 python scripts/run_pipeline.py
 ```
 
-## Pipeline Stages
+Use this only if you need the older Slack-only flow. For two-source processing use `run_multi_source_pipeline.py`.
 
-### 1. Ingest Messages
-
-Fetches messages from Slack channels:
-- Watermark-based incremental fetch
-- Root messages only (no threads)
-- Extracts links, anchors, reactions
-- Normalizes text
-
-### 2. Build Candidates
-
-Scores messages for event extraction:
-- Configurable scoring weights
-- Keyword matching
-- @channel/@here mentions
-- Reactions, replies, anchors, links
-- Bot penalty
-
-### 3. Extract Events
-
-LLM-powered event extraction:
-- 0-5 events per message
-- Structured JSON output
-- Date/time resolution
-- Category classification
-- Confidence scoring
-- Budget enforcement
-
-### 4. Deduplicate
-
-Merges similar events:
-- **Rule 1**: Same message events never merge
-- **Rule 2**: Inter-message merge if:
-  - Anchor/link overlap
-  - Date delta ≤ 48 hours
-  - Title similarity ≥ 0.8 (fuzzy)
-
-### 5. Publish Digest
-
-Daily Slack digest:
-- Sorted by date, category, confidence
-- Slack Block Kit formatting
-- Chunking for long digests
-- Localized date/time display
-
-## Configuration
-
-### Channel Configuration
-
-Each monitored channel can have custom settings:
-
-```json
-{
-  "channel_id": "C123456",
-  "channel_name": "releases",
-  "threshold_score": 0.0,
-  "whitelist_keywords": ["release", "deploy", "launch", "update"],
-  "keyword_weight": 10.0,
-  "mention_weight": 8.0,
-  "reply_weight": 5.0,
-  "reaction_weight": 3.0,
-  "anchor_weight": 4.0,
-  "link_weight": 2.0,
-  "file_weight": 3.0,
-  "bot_penalty": -15.0
-}
-```
-
-**Important:** By default, `threshold_score` is set to `0.0`, which means **all messages** from the channel will be processed by LLM. This ensures maximum event capture but may increase costs. You can increase this threshold to filter out low-quality messages if needed.
-
-### Scoring System
-
-Messages are scored based on features:
-
-| Feature | Default Weight | Max Contribution |
-|---------|----------------|------------------|
-| Keywords | 10.0 per keyword | Unlimited |
-| @channel/@here | 8.0 | 8.0 |
-| Replies ≥1 | 5.0 | 5.0 |
-| Reactions ≥2 | 3.0 | 3.0 |
-| Anchors | 4.0 per anchor | 12.0 (capped) |
-| Links | 2.0 per link | 6.0 (capped) |
-| Files | 3.0 | 3.0 |
-| Bot | -15.0 | -15.0 |
-
-### Event Categories
-
-- `product`: Releases, features, deployments, launches
-- `process`: Internal processes, workflows, policies
-- `marketing`: Campaigns, promotions, announcements
-- `risk`: Incidents, issues, compliance, security
-- `org`: Organizational changes, hiring, team updates
-- `unknown`: Unclear or doesn't fit
-
-## Data Model
-
-### SQLite Schema
-
-Three main tables:
-
-1. **raw_slack_messages**: Raw ingested messages
-2. **event_candidates**: Scored candidates for LLM processing
-3. **events**: Extracted and deduplicated events
-
-Plus auxiliary tables:
-- **llm_calls**: LLM API call metadata and costs
-- **channel_watermarks**: Incremental processing state
-
-Supports both SQLite (development) and PostgreSQL (production) through repository factory pattern.
-
-## Development
-
-### Code Quality
-
-Unified development workflow using Make:
+### Queue-based Runtime
 
 ```bash
-# Complete development setup (includes pre-commit hooks)
-make dev-setup
+# Enqueue periodic iterations
+python scripts/run_pipeline_scheduler.py --interval-seconds 300
 
-# Fast feedback during development
-make pre-commit    # Format, lint, typecheck (~15s)
-
-# Full CI check (matches GitHub Actions)
-make ci           # Format, lint, typecheck, test (~45s)
-
-# Before pushing (strictest check)
-make pre-push     # Full CI pipeline
-
-# Individual checks
-make format       # Format code with ruff
-make lint         # Lint with ruff
-make typecheck    # Type check with mypy
-make test-quick   # Run tests (fast)
+# Workers
+python scripts/run_ingest_worker.py
+python scripts/run_extraction_worker.py
+python scripts/run_llm_worker.py
+python scripts/run_dedup_worker.py
 ```
 
-**CI/CD:**
-- ⚡ Fast CI with uv (10-100x faster than pip)
-- 🔄 Parallel jobs: lint (8s), typecheck (23s), tests (19s)
-- 🎯 Total CI time: ~30s (was 2-3min)
-- ✅ Pre-commit hooks for automatic formatting
-- 🔗 Complete synchronization between local and CI workflows
+Notes:
+- Current ingest worker composition is Slack-oriented (`create_slack_ingestion_handlers`).
+- Multi-source end-to-end processing is fully supported via `run_multi_source_pipeline.py`.
 
-### Project Standards
-
-- **PEP 8** compliance with Black formatting (line length: 88)
-- **Type hints** required for all functions
-- **Google-style docstrings** for public APIs
-- **100% type coverage** with mypy strict mode
-- **Specification Pattern** for domain filtering (no string literals)
-- **Query Builder** for type-safe database queries
-- **Domain constants** with `Final` type hints
-- **Ruff PLR2004** enforced (no magic numbers)
-
-**Code Quality Score:** 7/7 (100%)
-- ✅ Constants in domain layer
-- ✅ Final + type hints
-- ✅ Enum/StrEnum usage
-- ✅ Config vs domain separation
-- ✅ Criteria/Specification pattern
-- ✅ PLR2004 compliance
-- ✅ Compiled regex patterns
-
-## Development Workflow
-
-### Unified Development System
-
-The project uses a **unified development workflow** with complete synchronization between:
-
-- **Local development**: Make commands
-- **Pre-commit hooks**: Automatic formatting and linting
-- **CI/CD pipeline**: GitHub Actions with identical commands
-- **Code quality tools**: Ruff, Mypy, Pytest
-
-### Quick Reference
-
-| Command | Purpose | Time | Use Case |
-|---------|---------|------|----------|
-| `make pre-commit` | Fast feedback | ~15s | After each change |
-| `make test-quick` | Test validation | ~20s | Before commit |
-| `make ci` | Full CI check | ~45s | Before push |
-| `make ci-local` | Detailed CI | ~45s | Debugging |
-
-### Development Setup
+## Docker
 
 ```bash
-# Complete setup (recommended)
-make dev-setup     # Install deps + pre-commit hooks
-
-# Manual setup (equivalent)
-uv sync --frozen --no-install-project
-uv run pre-commit install
+docker compose build
+docker compose up -d
 ```
 
-### Git Workflow
+Services include PostgreSQL, pipeline scheduler/workers, Telegram worker, metrics exporter, and Streamlit UI.
+
+## Testing & Quality
 
 ```bash
-# Make changes
-git add .
+# Fast tests
+make test-quick
 
-# Fast pre-commit check (automatic)
-git commit -m "feat: ..."
+# Coverage
+make test-cov
 
-# Before pushing (manual)
-make pre-push
+# Lint + format + typecheck + tests
+make ci
 
-# Push to trigger CI
-git push
-```
-
-## Troubleshooting
-
-### Slack API Errors
-
-```bash
-# Test Slack connection
-python -c "from slack_sdk import WebClient; client = WebClient(token='YOUR_TOKEN'); print(client.auth_test())"
-```
-
-### OpenAI API Errors
-
-```bash
-# Test OpenAI connection
-python -c "from openai import OpenAI; client = OpenAI(api_key='YOUR_KEY'); print(client.models.list())"
-```
-
-### Budget Exceeded
-
-If daily budget is reached:
-- Pipeline stops LLM processing
-- Only high-score candidates (P90+) are processed
-- Error logged in results
-
-### Database Issues
-
-```bash
-# Check database
-sqlite3 data/slack_events.db ".tables"
-
-# View recent events
-sqlite3 data/slack_events.db "SELECT title, event_date FROM events ORDER BY event_date DESC LIMIT 10"
-
-# Quick health check
+# Fast local checks
 make pre-commit
 ```
 
-### Observability
+Tooling:
+- Formatter/Linter: Ruff
+- Type checking: mypy
+- Tests: pytest
 
-Metrics and health endpoints are available as soon as the containers start. Refer to
-[`docs/OPERATIONS_OBSERVABILITY.md`](docs/OPERATIONS_OBSERVABILITY.md) for complete guidance.
-
-The Docker Compose stack exposes a single Prometheus endpoint from the dedicated
-`metrics-exporter` service. All other services disable the in-process exporter by setting
-`METRICS_EXPORTER_AUTO_START=0`.
-
-Quick checks from the host running Docker Compose:
+## Streamlit UI
 
 ```bash
-# Prometheus metrics (port 9000)
-curl -sf http://localhost:9000/metrics | head
-
-# Streamlit health endpoint (port 8501)
-curl -sf http://localhost:8501/_stcore/health
+streamlit run app.py
 ```
 
-Running ad-hoc scripts? Export `METRICS_EXPORTER_AUTO_START=0` to keep them from binding
-`0.0.0.0:9000`, then call `ensure_metrics_exporter()` or run `python -m src.observability.metrics`
-when you want to expose metrics.
+Default URL: `http://127.0.0.1:8501`
 
-### Development Issues
+## Operations & Reference Docs
 
-```bash
-# If development tools aren't working
-make dev-setup
+- Docs index: [`docs/README.md`](docs/README.md)
+- Configuration: [`docs/CONFIG.md`](docs/CONFIG.md)
+- Metrics/health/observability: [`docs/OPERATIONS_OBSERVABILITY.md`](docs/OPERATIONS_OBSERVABILITY.md)
+- Pipeline workers: [`docs/pipeline_workers.md`](docs/pipeline_workers.md)
 
-# If pre-commit hooks fail
-make pre-commit-install
+## Development Notes
 
-# If tests fail locally but pass in CI
-make ci-local  # Detailed debugging
-```
-
-## Recent Updates
-
-### 2025-10-18: Unified Development Workflow ✅
-
-**Complete Make-centric Development System:**
-- ✅ **Unified Makefile**: Single point of control for all development tasks
-- ✅ **Pre-commit Integration**: Automatic formatting and linting on commit
-- ✅ **CI/CD Synchronization**: Identical commands between local and GitHub Actions
-- ✅ **Parallel Execution**: Fast CI with lint (8s) + typecheck (23s) + tests (19s)
-- ✅ **Development Setup**: `make dev-setup` for complete environment setup
-- ✅ **Workflow Documentation**: Complete guide in `DEVELOPMENT_WORKFLOW.md`
-
-**Key Commands:**
-```bash
-make dev-setup     # Complete development setup
-make pre-commit    # Fast feedback (~15s)
-make ci           # Full CI check (~45s)
-make pre-push     # Before pushing
-```
-
-### 2025-10-17: PostgreSQL Support ✅
-
-**Production-Ready Database:**
-- ✅ Full PostgreSQL integration with Alembic migrations
-- ✅ Repository factory pattern for seamless DB switching
-- ✅ Docker Compose with PostgreSQL 16 Alpine
-- ✅ Auto-migration on container startup
-- ✅ 100% backward compatible with SQLite
-- ✅ Streamlit UI supports both databases
-- ✅ See `MIGRATION_TO_POSTGRES.md` for migration guide
-
-**Key Features:**
-- Configuration via `DATABASE_TYPE` environment variable
-- Identical schema for SQLite and PostgreSQL
-- JSONB support for structured data in PostgreSQL
-- Health checks and connection pooling
-- 84 tests passing (13 PostgreSQL-specific)
-
-### 2025-10-10: Configuration Refactoring ✅
-
-**Secrets vs Config Separation:**
-- ✅ `.env` - Only SLACK_BOT_TOKEN and OPENAI_API_KEY
-- ✅ `config.yaml` - All non-sensitive application settings
-- ✅ Added PyYAML dependency
-- ✅ Backward compatible with `.env` overrides
-- ✅ See `CONFIG_REFACTORING.md` for details
-
-### 2025-10-10: Code Quality Enhancement ✅
-
-**Major improvements:**
-- ✅ Specification Pattern implementation (330 lines)
-- ✅ Query Builder pattern (371 lines)
-- ✅ Domain constants layer with Final type hints
-- ✅ Ruff PLR2004 enforcement (no magic numbers)
-- ✅ Type-safe database queries (no string literals)
-- ✅ 100% backward compatibility
-
-**Quality metrics:**
-- Tests: 79/79 passing ✅
-- Linters: All checks passed ✅
-- Code quality: 7/7 (100%) ✅
-- Zero breaking changes ✅
-
-### 2025-10-09: Production Validation ✅
-
-- ✅ Tested with 20 real messages
-- ✅ 100% LLM extraction success rate
-- ✅ Cost: $0.0031 for 20 messages
-- ✅ Average latency: 13.5s per LLM call
-- ✅ Rate limiting handled gracefully
-- ✅ Comprehensive logging added
-
-## Database Configuration
-
-### SQLite (Default - Development)
-Perfect for local development and testing. No additional setup required.
-
-```yaml
-# config.yaml
-database:
-  type: sqlite
-  path: data/slack_events.db
-```
-
-### PostgreSQL (Production)
-Recommended for production deployment with Docker.
-
-```yaml
-# config.yaml
-database:
-  type: postgres
-  postgres:
-    host: localhost
-    port: 5432
-    database: slack_events
-    user: postgres
-```
-
-Set password in `.env`:
-```bash
-POSTGRES_PASSWORD=your_secure_password
-```
-
-Run migrations:
-```bash
-alembic upgrade head
-```
-
-> ℹ️ Environment variables such as `DATABASE_TYPE` and `POSTGRES_*` override values from
-> `config/*.yaml`. Set them in production to keep secrets out of version control. See
-> [docs/CONFIG.md](docs/CONFIG.md) for details.
-
-> ⚙️ Each worker process maintains its own PostgreSQL pool. The defaults keep idle footprint
-> low (`postgres_min_connections=1`) and cap peak usage to stay well under the Postgres server
-> limit (`postgres_max_connections=10`). This allows ad-hoc scripts (for example
-> `scripts/run_pipeline.py`) and tooling like DataGrip to connect reliably even with all workers
-> active. Increase these values only when your database has confirmed headroom.
-
-See [MIGRATION_TO_POSTGRES.md](MIGRATION_TO_POSTGRES.md) for complete migration guide.
-
-## Future Enhancements
-
-Planned for future releases:
-
-- [ ] Thread/reply processing
-- [ ] Edit/delete event handling
-- [ ] Semantic search with embeddings
-- [ ] Calendar export (Google Calendar, ICS)
-- [ ] Real-time streaming mode
-- [ ] Enhanced web dashboard with analytics
-- [ ] Multi-workspace support
-
-## License
-
-This project is internal tooling. All rights reserved.
-
-## Support
-
-For issues or questions, contact the platform team.
+- Keep secrets only in `.env`
+- Keep non-sensitive app config in `config/*.yaml`
+- Prefer `make` targets over manual tool invocations
+- Validate changes with `make ci` before pushing

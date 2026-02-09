@@ -1,35 +1,37 @@
-# Distributed Pipeline Services
+# Pipeline Workers
 
-The pipeline now runs as independently scalable workers connected through the
-shared task queue. Docker Compose defines the following long-lived services:
+This document describes the queue-based runtime.
+
+## Services
 
 | Service | Purpose | Default command |
 | --- | --- | --- |
-| `pipeline-scheduler` | Periodically enqueues ingestion, extraction, and deduplication jobs. | `python scripts/run_pipeline_scheduler.py --interval-seconds 300` |
-| `ingest-worker` | Fetches Slack messages and builds new candidates. | `python scripts/run_ingest_worker.py` |
-| `extraction-worker` | Leases extraction tasks and schedules downstream LLM jobs. | `python scripts/run_extraction_worker.py` |
-| `llm-worker` | Runs LLM extraction for individual candidates and enqueues dedup tasks. | `python scripts/run_llm_worker.py` |
-| `dedup-worker` | Merges newly extracted events and signals digest publication. | `python scripts/run_dedup_worker.py` |
+| `pipeline-scheduler` | Enqueue periodic pipeline iterations | `python scripts/run_pipeline_scheduler.py --interval-seconds 300` |
+| `ingest-worker` | Process ingestion tasks and build candidates | `python scripts/run_ingest_worker.py` |
+| `extraction-worker` | Schedule LLM extraction tasks from candidate queue | `python scripts/run_extraction_worker.py` |
+| `llm-worker` | Execute per-candidate LLM extraction | `python scripts/run_llm_worker.py` |
+| `dedup-worker` | Deduplicate extracted events | `python scripts/run_dedup_worker.py` |
 
-Each worker can be scaled independently. For example, to triple the LLM
-capacity:
+## Important Runtime Note
 
-```bash
-docker compose up --scale llm-worker=3 -d
-```
-
-## Bootstrapping the Queue
-
-The scheduler continuously submits new tasks. For a one-off bootstrap (for
-instance after clearing the queue) run a single iteration:
+Current queue ingestion composition (`create_slack_ingestion_handlers`) is Slack-oriented.
+For complete multi-source end-to-end processing in a single process, use:
 
 ```bash
-docker compose run --rm pipeline-scheduler python scripts/run_pipeline_scheduler.py --run-once
+python scripts/run_multi_source_pipeline.py
 ```
 
-## Monitoring Queue Depth
+## Bootstrap / Smoke Test
 
-Use the built-in PostgreSQL table to inspect outstanding work:
+```bash
+python scripts/run_pipeline_scheduler.py --run-once
+python scripts/run_ingest_worker.py --run-once
+python scripts/run_extraction_worker.py --run-once
+python scripts/run_llm_worker.py --run-once
+python scripts/run_dedup_worker.py --run-once
+```
+
+## Queue Inspection (PostgreSQL)
 
 ```bash
 docker compose exec postgres psql \
@@ -38,15 +40,10 @@ docker compose exec postgres psql \
   -c "SELECT task_type, status, COUNT(*)\n      FROM pipeline_tasks\n      GROUP BY task_type, status\n      ORDER BY task_type, status;"
 ```
 
-The scheduler and workers emit structured logs containing correlation IDs for
-traceability. When investigating a backlog, filter logs by `correlation_id`
-(value is written by the scheduler for every batch).
+## Scaling
 
-## Local Execution
-
-All scripts accept `--run-once` for smoke testing and `--json-logs` for
-production-style logging. Example:
+Example: scale LLM workers horizontally.
 
 ```bash
-SLACK_BOT_TOKEN=xxx OPENAI_API_KEY=yyy python scripts/run_ingest_worker.py --run-once
+docker compose up --scale llm-worker=3 -d
 ```
