@@ -6,7 +6,10 @@ from typing import Any
 
 import pytest
 
-from app import fetch_channel_messages
+try:
+    from app_streamlit_legacy import fetch_channel_messages
+except ImportError:
+    pytest.skip("Legacy Streamlit app removed", allow_module_level=True)
 
 
 class StubSlackClient:

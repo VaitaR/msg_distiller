@@ -7,25 +7,17 @@ Following error taxonomy: retryable, non-retryable, validation, rate-limit.
 class SlackEventManagerError(Exception):
     """Base exception for all application errors."""
 
-    pass
-
 
 class RetryableError(SlackEventManagerError):
     """Errors that can be retried (network issues, temporary failures)."""
-
-    pass
 
 
 class NonRetryableError(SlackEventManagerError):
     """Errors that should not be retried (validation, auth, logic errors)."""
 
-    pass
-
 
 class ValidationError(NonRetryableError):
     """Data validation errors."""
-
-    pass
 
 
 class RateLimitError(RetryableError):
@@ -40,22 +32,14 @@ class RateLimitError(RetryableError):
 class SlackAPIError(RetryableError):
     """Slack API communication errors."""
 
-    pass
-
 
 class LLMAPIError(RetryableError):
     """LLM API communication errors."""
-
-    pass
 
 
 class BudgetExceededError(NonRetryableError):
     """LLM budget has been exceeded."""
 
-    pass
-
 
 class RepositoryError(RetryableError):
     """Database/storage errors."""
-
-    pass

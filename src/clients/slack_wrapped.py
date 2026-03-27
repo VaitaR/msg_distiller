@@ -151,7 +151,7 @@ class SlackClient(BaseSlackClient):
             )
             return {"real_name": "Unknown", "name": "unknown"}
 
-        user = cast(dict[str, Any], data.get("user", {}))
+        user = cast("dict[str, Any]", data.get("user", {}))
         if user:
             self._users_cache.put(user_id, user)
         return user
@@ -172,7 +172,7 @@ class SlackClient(BaseSlackClient):
         if not data.get("ok", False):
             return None
 
-        permalink = cast(str | None, data.get("permalink"))
+        permalink = cast("str | None", data.get("permalink"))
         if permalink:
             self._permalink_cache.put(channel_id, message_ts, permalink)
         return permalink
@@ -195,7 +195,7 @@ class SlackClient(BaseSlackClient):
                 action="users_list",
             )
             data = self._extract_data(response)
-            members = cast(list[dict[str, Any]], data.get("members", []))
+            members = cast("list[dict[str, Any]]", data.get("members", []))
             for member in members:
                 user_id = member.get("id")
                 if user_id:
@@ -203,7 +203,7 @@ class SlackClient(BaseSlackClient):
                     total_cached += 1
 
             cursor = cast(
-                str | None,
+                "str | None",
                 data.get("response_metadata", {}).get("next_cursor")
                 if isinstance(data.get("response_metadata"), dict)
                 else None,
@@ -218,8 +218,8 @@ class SlackClient(BaseSlackClient):
 
     def _extract_data(self, response: Any) -> dict[str, Any]:
         if hasattr(response, "data"):
-            return cast(dict[str, Any], response.data)
-        return cast(dict[str, Any], response)
+            return cast("dict[str, Any]", response.data)
+        return cast("dict[str, Any]", response)
 
     def _call_with_backoff(
         self,

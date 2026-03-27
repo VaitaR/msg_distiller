@@ -93,7 +93,7 @@ class LLMClientPool:
         if api_key_obj is not None:
             try:
                 api_key = api_key_obj.get_secret_value()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 api_key = None
 
         if not isinstance(api_key, str) or not api_key.strip():

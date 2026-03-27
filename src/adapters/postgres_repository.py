@@ -684,7 +684,10 @@ class PostgresRepository:
                 rows = cur.fetchall()
                 # Get column names from cursor description
                 columns = [desc[0] for desc in cur.description]
-                return [self._row_to_message(dict(zip(columns, row))) for row in rows]
+                return [
+                    self._row_to_message(dict(zip(columns, row, strict=False)))
+                    for row in rows
+                ]
 
     def get_new_messages_for_candidates_by_source(
         self, source_id: MessageSource
@@ -719,7 +722,8 @@ class PostgresRepository:
                     rows = cur.fetchall()
                     columns = [desc[0] for desc in cur.description]
                     return [
-                        self._row_to_message(dict(zip(columns, row))) for row in rows
+                        self._row_to_message(dict(zip(columns, row, strict=False)))
+                        for row in rows
                     ]
 
                 elif source_id == MessageSource.TELEGRAM:
@@ -737,12 +741,12 @@ class PostgresRepository:
                     columns = [desc[0] for desc in cur.description]
                     from typing import cast
 
-                    from src.domain.protocols import MessageRecord
-
                     return cast(
-                        list[MessageRecord],
+                        "list[MessageRecord]",
                         [
-                            self._row_to_telegram_message(dict(zip(columns, row)))
+                            self._row_to_telegram_message(
+                                dict(zip(columns, row, strict=False))
+                            )
                             for row in rows
                         ],
                     )
@@ -1132,7 +1136,10 @@ class PostgresRepository:
                 rows = cur.fetchall()
                 # Get column names from cursor description
                 columns = [desc[0] for desc in cur.description]
-                return [self._row_to_event(dict(zip(columns, row))) for row in rows]
+                return [
+                    self._row_to_event(dict(zip(columns, row, strict=False)))
+                    for row in rows
+                ]
 
     def get_events_in_window_filtered(
         self,
@@ -1167,7 +1174,10 @@ class PostgresRepository:
                 )
                 rows = cur.fetchall()
                 columns = [desc[0] for desc in cur.description]
-                return [self._row_to_event(dict(zip(columns, row))) for row in rows]
+                return [
+                    self._row_to_event(dict(zip(columns, row, strict=False)))
+                    for row in rows
+                ]
 
     def save_llm_call(self, metadata: LLMCallMetadata) -> None:
         """Save LLM call metadata.
@@ -1265,7 +1275,7 @@ class PostgresRepository:
                     """,
                     (prompt_hash,),
                 )
-                row = cast(tuple[str, datetime | None] | None, cur.fetchone())
+                row = cast("tuple[str, datetime | None] | None", cur.fetchone())
                 if not row:
                     return None
 
@@ -1708,7 +1718,9 @@ class PostgresRepository:
                     # Get column names from cursor description
                     columns = [desc[0] for desc in cur.description]
                     return [
-                        self._row_to_telegram_message(dict(zip(columns, row)))
+                        self._row_to_telegram_message(
+                            dict(zip(columns, row, strict=False))
+                        )
                         for row in rows
                     ]
 

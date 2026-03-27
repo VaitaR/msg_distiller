@@ -34,7 +34,6 @@ class Specification(ABC, Generic[T]):
         Returns:
             True if candidate satisfies the specification
         """
-        pass
 
     def and_(self, other: "Specification[T]") -> "AndSpecification[T]":
         """Combine with AND logic."""

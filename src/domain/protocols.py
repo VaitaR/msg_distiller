@@ -8,10 +8,13 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from src.domain.models import (
     Event,
+    EventAuditEntry,
     EventCandidate,
+    EventVersion,
     LLMCallMetadata,
     LLMResponse,
     MessageSource,
+    ReviewLifecycleStatus,
     SlackMessage,
     TelegramMessage,
 )
@@ -519,6 +522,121 @@ class RepositoryProtocol(Protocol):
 
         Raises:
             RepositoryError: On storage errors
+        """
+        ...
+
+    # ------------------------------------------------------------------
+    # Review lifecycle methods
+    # ------------------------------------------------------------------
+
+    def get_event_by_id(self, event_id: str) -> Event | None:
+        """Get a single event by its UUID string.
+
+        Args:
+            event_id: UUID string of the event
+
+        Returns:
+            Event or None
+        """
+        ...
+
+    def get_events_for_review(
+        self,
+        status: ReviewLifecycleStatus | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[Event]:
+        """Get events filtered by review status for the review queue.
+
+        Args:
+            status: Filter by review lifecycle status (None = all)
+            limit: Max results
+            offset: Pagination offset
+
+        Returns:
+            List of events ordered by extracted_at DESC
+        """
+        ...
+
+    def update_event_review(
+        self,
+        event_id: str,
+        review_status: ReviewLifecycleStatus,
+        reviewed_by: str,
+    ) -> bool:
+        """Update review status of an event.
+
+        Args:
+            event_id: UUID string of the event
+            review_status: New review status
+            reviewed_by: Actor performing the review
+
+        Returns:
+            True if event was found and updated
+        """
+        ...
+
+    def update_event_fields(
+        self,
+        event_id: str,
+        updates: dict[str, Any],
+    ) -> bool:
+        """Patch specific fields of an event (for human edits).
+
+        Increments version, sets origin=human_edit.
+
+        Args:
+            event_id: UUID string of the event
+            updates: Dict of field_name -> new_value
+
+        Returns:
+            True if event was found and updated
+        """
+        ...
+
+    def save_audit_entry(self, entry: EventAuditEntry) -> None:
+        """Persist an audit log entry.
+
+        Args:
+            entry: Audit entry to save
+        """
+        ...
+
+    def save_event_version(self, version: EventVersion) -> None:
+        """Persist a full event snapshot.
+
+        Args:
+            version: Event version snapshot
+        """
+        ...
+
+    def get_audit_log(self, event_id: str) -> list[EventAuditEntry]:
+        """Get audit trail for an event.
+
+        Args:
+            event_id: UUID string of the event
+
+        Returns:
+            List of audit entries ordered by timestamp ASC
+        """
+        ...
+
+    def get_event_versions(self, event_id: str) -> list[EventVersion]:
+        """Get all version snapshots for an event.
+
+        Args:
+            event_id: UUID string of the event
+
+        Returns:
+            List of versions ordered by version ASC
+        """
+        ...
+
+    def count_events_by_review_status(self) -> dict[str, int]:
+        """Count events grouped by review_status.
+
+        Returns:
+            Dict mapping review_status value to count
         """
         ...
 

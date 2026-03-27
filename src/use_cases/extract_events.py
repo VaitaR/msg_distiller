@@ -182,7 +182,7 @@ def _build_prompt_metadata(
     if callable(raw_lookup):
         try:
             raw_metadata = raw_lookup(candidate.message_id, source_id)
-        except Exception:  # noqa: BLE001
+        except Exception:
             raw_metadata = None
         if isinstance(raw_metadata, dict):
             for key in ("permalink", "post_url", "forwarded_from", "file_mime"):
@@ -471,7 +471,7 @@ def _process_candidate_with_llm(
                 if isinstance(cached_payload, str) and cached_payload:
                     try:
                         llm_response = LLMResponse.model_validate_json(cached_payload)
-                    except Exception as exc:  # noqa: BLE001
+                    except Exception as exc:
                         logger.warning(
                             "llm_cache_deserialization_failed",
                             prompt_hash=prompt_hash,
@@ -713,7 +713,7 @@ def _process_candidate_with_llm(
             candidate.message_id, CandidateStatus.LLM_FAIL.value
         )
         return metrics
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         metrics.errors.append(f"Unexpected error for {candidate.message_id}: {exc}")
         repository.update_candidate_status(
             candidate.message_id, CandidateStatus.LLM_FAIL.value

@@ -117,27 +117,42 @@ services:
     networks:
       - slack_network
 
-  streamlit-ui:
+  api-server:
+    <<: *worker-base
+    container_name: slack_api_server
+    command: python scripts/run_api_server.py --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - slack_network
+
+  dash-ui:
     build: .
-    container_name: slack_streamlit
+    container_name: slack_dash_ui
     environment:
       <<: *app-env
       METRICS_EXPORTER_AUTO_START: '0'
+      API_BASE_URL: http://api-server:8000
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
-      pipeline-scheduler:
-        condition: service_started
+      api-server:
+        condition: service_healthy
     ports:
-      - "8501:8501"
+      - "8050:8050"
     volumes:
       - ./data:/app/data
-      - ./logs:/app/logs:ro
       - ./config:/app/config
-    command: streamlit run app.py --server.port=8501 --server.address=0.0.0.0
+    command: python scripts/run_dash.py --host 0.0.0.0 --port 8050
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8050/"]
       interval: 30s
       timeout: 10s
       retries: 3

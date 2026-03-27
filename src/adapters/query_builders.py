@@ -18,17 +18,14 @@ class BaseQueryCriteria(ABC):
     @abstractmethod
     def to_where_clause(self) -> tuple[str, list[Any]]:
         """Build SQL WHERE clause with parameters."""
-        pass
 
     @abstractmethod
     def to_order_clause(self) -> str:
         """Build SQL ORDER BY clause."""
-        pass
 
     @abstractmethod
     def to_limit_clause(self) -> tuple[str, list[Any]]:
         """Build SQL LIMIT/OFFSET clause."""
-        pass
 
 
 @dataclass

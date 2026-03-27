@@ -77,7 +77,7 @@ class _FallbackMetricInstance:
     def inc(self, amount: float = 1.0) -> None:
         self._metric._increment(self._key, amount)
 
-    def observe(self, value: float) -> None:  # noqa: ARG002 - value unused
+    def observe(self, value: float) -> None:
         self._metric._increment(self._key, 1.0)
 
 

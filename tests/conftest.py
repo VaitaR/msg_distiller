@@ -24,6 +24,7 @@ from src.domain.models import (
     SlackMessage,
 )
 from src.domain.protocols import RepositoryProtocol
+from tests.factories import SEED_EVENTS
 
 
 @pytest.fixture(autouse=True)
@@ -366,3 +367,65 @@ def postgres_test_db():
             conn.commit()
 
     repo.close()
+
+
+# ---------------------------------------------------------------------------
+# Seeded DB fixtures — provide a SQLite DB pre-populated with SEED_EVENTS
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def seeded_db(
+    tmp_path: Path,
+) -> Generator[tuple[str, list[Event]], None, None]:
+    """Function-scoped: isolated SQLite DB with 15 seed events.
+
+    Each test gets its own DB so mutations (approve/reject) don't bleed over.
+    Yields (db_path, seed_events).
+    """
+    from src.adapters.sqlite_repository import SQLiteRepository
+
+    db_path = str(tmp_path / "seeded_test.sqlite")
+    repo = SQLiteRepository(db_path=db_path)
+    repo.save_events(SEED_EVENTS)
+    try:
+        yield db_path, list(SEED_EVENTS)
+    finally:
+        try:
+            repo.close()
+        except Exception:
+            pass
+        try:
+            Path(db_path).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+@pytest.fixture(scope="session")
+def seeded_db_session(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Generator[tuple[str, list[Event]], None, None]:
+    """Session-scoped: single SQLite DB with 15 seed events shared across the session.
+
+    Used by e2e tests so servers only need to start once.
+    NOTE: mutation tests (approve/reject) must not share rows — they pick
+    different needs_review events by index.
+    Yields (db_path, seed_events).
+    """
+    from src.adapters.sqlite_repository import SQLiteRepository
+
+    tmp = tmp_path_factory.mktemp("e2e_db")
+    db_path = str(tmp / "seeded_e2e.sqlite")
+    repo = SQLiteRepository(db_path=db_path)
+    repo.save_events(SEED_EVENTS)
+    try:
+        yield db_path, list(SEED_EVENTS)
+    finally:
+        try:
+            repo.close()
+        except Exception:
+            pass
+        try:
+            Path(db_path).unlink(missing_ok=True)
+        except OSError:
+            pass

@@ -145,7 +145,7 @@ def run_ingest_and_extract_pipeline(
 
         reporter.update(progress=0.05, message="Starting ingestion")
         ingest_result = ingest_messages_use_case(
-            slack_client=cast(WrappedSlackClient, deps.slack_client),
+            slack_client=cast("WrappedSlackClient", deps.slack_client),
             repository=deps.repository,
             settings=deps.settings,
             correlation_id=correlation_id,

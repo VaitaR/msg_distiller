@@ -23,7 +23,7 @@ def test_llm_prompt_includes_message_metadata_block() -> None:
         "reply_count": 2,
     }
 
-    prompt = llm._build_prompt(  # noqa: SLF001
+    prompt = llm._build_prompt(
         "hello",
         ["https://example.com"],
         datetime(2025, 12, 1, 12, 0, tzinfo=UTC),

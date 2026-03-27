@@ -83,7 +83,7 @@ class _BaseWorker:
                     attempts=task.attempts,
                 )
                 self._handle_task(task)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.exception(
                     "worker_task_failed",
                     task_type=self._task_type.value,
@@ -330,7 +330,7 @@ class DigestWorker(_BaseWorker):
         )
         self._publish_digest = publish_digest
 
-    def _handle_task(self, task: Task) -> None:  # noqa: ARG002
+    def _handle_task(self, task: Task) -> None:
         result = self._publish_digest()
         logger.info(
             "digest_worker_summary",
@@ -340,9 +340,9 @@ class DigestWorker(_BaseWorker):
 
 
 __all__ = [
-    "IngestWorker",
-    "ExtractionWorker",
-    "LLMExtractionWorker",
     "DedupWorker",
     "DigestWorker",
+    "ExtractionWorker",
+    "IngestWorker",
+    "LLMExtractionWorker",
 ]

@@ -29,10 +29,14 @@ from src.domain.exceptions import RepositoryError
 from src.domain.models import (
     CandidateStatus,
     Event,
+    EventAuditEntry,
     EventCandidate,
     EventCategory,
+    EventOrigin,
+    EventVersion,
     LLMCallMetadata,
     MessageSource,
+    ReviewLifecycleStatus,
     ScoringFeatures,
     SlackMessage,
     TelegramMessage,
@@ -380,6 +384,61 @@ class SQLiteRepository:
                 processing_ts TEXT
             )
             """
+        )
+
+        # Review lifecycle columns on events (idempotent ALTER)
+        for col, col_def in [
+            ("version", "INTEGER DEFAULT 1"),
+            ("origin", "TEXT DEFAULT 'ai_extraction'"),
+            ("review_status", "TEXT DEFAULT 'needs_review'"),
+            ("reviewed_by", "TEXT"),
+            ("reviewed_at", "TEXT"),
+        ]:
+            try:
+                cursor.execute(f"ALTER TABLE events ADD COLUMN {col} {col_def}")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
+
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_events_review_status ON events(review_status)"
+        )
+
+        # Event audit log (append-only)
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS event_audit_log (
+                audit_id TEXT PRIMARY KEY,
+                event_id TEXT NOT NULL,
+                version INTEGER NOT NULL,
+                action TEXT NOT NULL,
+                origin TEXT NOT NULL,
+                changes TEXT,
+                actor TEXT NOT NULL DEFAULT 'pipeline',
+                timestamp TEXT NOT NULL,
+                note TEXT
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_audit_event ON event_audit_log(event_id)"
+        )
+
+        # Event versions (full snapshots, append-only)
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS event_versions (
+                version_id TEXT PRIMARY KEY,
+                event_id TEXT NOT NULL,
+                version INTEGER NOT NULL,
+                origin TEXT NOT NULL,
+                snapshot TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_versions_event ON event_versions(event_id)"
         )
 
         conn.commit()
@@ -1520,8 +1579,8 @@ class SQLiteRepository:
             if not row:
                 return None
 
-            response_json = cast(str, row["response_json"])
-            cached_ts_raw = cast(str | None, row["ts"])
+            response_json = cast("str", row["response_json"])
+            cached_ts_raw = cast("str | None", row["ts"])
 
             if max_age is not None:
                 if not cached_ts_raw:
@@ -1778,6 +1837,20 @@ class SQLiteRepository:
             relations=[],  # Relations loaded separately if needed
             # Source tracking
             source_id=source_id,
+            # Review lifecycle (with backward compat for old rows)
+            version=int(row["version"])
+            if "version" in row.keys() and row["version"]
+            else 1,
+            origin=EventOrigin(row["origin"])
+            if "origin" in row.keys() and row["origin"]
+            else EventOrigin.AI_EXTRACTION,
+            review_status=ReviewLifecycleStatus(row["review_status"])
+            if "review_status" in row.keys() and row["review_status"]
+            else ReviewLifecycleStatus.NEEDS_REVIEW,
+            reviewed_by=row["reviewed_by"] if "reviewed_by" in row.keys() else None,
+            reviewed_at=_parse_dt(row["reviewed_at"])
+            if "reviewed_at" in row.keys()
+            else None,
         )
 
     def get_last_processed_ts(
@@ -2097,3 +2170,222 @@ class SQLiteRepository:
 
         except sqlite3.Error as e:
             raise RepositoryError(f"Failed to get events by cluster: {e}")
+
+    # ------------------------------------------------------------------
+    # Review lifecycle methods
+    # ------------------------------------------------------------------
+
+    def get_event_by_id(self, event_id: str) -> Event | None:
+        """Get a single event by its UUID string."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM events WHERE event_id = ?", (event_id,))
+            row = cursor.fetchone()
+            conn.close()
+            if row is None:
+                return None
+            return self._row_to_event(row)
+        except sqlite3.Error as e:
+            raise RepositoryError(f"Failed to get event by id: {e}")
+
+    def get_events_for_review(
+        self,
+        status: ReviewLifecycleStatus | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[Event]:
+        """Get events filtered by review status."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            if status is not None:
+                cursor.execute(
+                    "SELECT * FROM events WHERE review_status = ? ORDER BY extracted_at DESC LIMIT ? OFFSET ?",
+                    (status.value, limit, offset),
+                )
+            else:
+                cursor.execute(
+                    "SELECT * FROM events ORDER BY extracted_at DESC LIMIT ? OFFSET ?",
+                    (limit, offset),
+                )
+            rows = cursor.fetchall()
+            conn.close()
+            return [self._row_to_event(row) for row in rows]
+        except sqlite3.Error as e:
+            raise RepositoryError(f"Failed to get events for review: {e}")
+
+    def update_event_review(
+        self,
+        event_id: str,
+        review_status: ReviewLifecycleStatus,
+        reviewed_by: str,
+    ) -> bool:
+        """Update review status of an event."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            now = datetime.now(tz=UTC).isoformat()
+            cursor.execute(
+                "UPDATE events SET review_status = ?, reviewed_by = ?, reviewed_at = ? WHERE event_id = ?",
+                (review_status.value, reviewed_by, now, event_id),
+            )
+            conn.commit()
+            updated = cursor.rowcount > 0
+            conn.close()
+            return updated
+        except sqlite3.Error as e:
+            raise RepositoryError(f"Failed to update event review: {e}")
+
+    def update_event_fields(
+        self,
+        event_id: str,
+        updates: dict[str, Any],
+    ) -> bool:
+        """Patch specific fields of an event."""
+        if not updates:
+            return True
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            # Build SET clause
+            set_parts = []
+            values: list[Any] = []
+            for key, val in updates.items():
+                set_parts.append(f"{key} = ?")
+                if isinstance(val, (list, dict)):
+                    values.append(json.dumps(val))
+                else:
+                    values.append(val)
+
+            # Also bump version and set origin
+            set_parts.append("version = version + 1")
+            set_parts.append("origin = ?")
+            values.append("human_edit")
+
+            values.append(event_id)
+            sql = f"UPDATE events SET {', '.join(set_parts)} WHERE event_id = ?"
+            cursor.execute(sql, values)
+            conn.commit()
+            updated = cursor.rowcount > 0
+            conn.close()
+            return updated
+        except sqlite3.Error as e:
+            raise RepositoryError(f"Failed to update event fields: {e}")
+
+    def save_audit_entry(self, entry: EventAuditEntry) -> None:
+        """Persist an audit log entry."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """INSERT OR IGNORE INTO event_audit_log
+                   (audit_id, event_id, version, action, origin, changes, actor, timestamp, note)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    str(entry.audit_id),
+                    str(entry.event_id),
+                    entry.version,
+                    entry.action,
+                    entry.origin.value,
+                    json.dumps(entry.changes),
+                    entry.actor,
+                    entry.timestamp.isoformat(),
+                    entry.note,
+                ),
+            )
+            conn.commit()
+            conn.close()
+        except sqlite3.Error as e:
+            raise RepositoryError(f"Failed to save audit entry: {e}")
+
+    def save_event_version(self, version: EventVersion) -> None:
+        """Persist a full event snapshot."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """INSERT OR IGNORE INTO event_versions
+                   (version_id, event_id, version, origin, snapshot, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    str(version.version_id),
+                    str(version.event_id),
+                    version.version,
+                    version.origin.value,
+                    json.dumps(version.snapshot, default=str),
+                    version.created_at.isoformat(),
+                ),
+            )
+            conn.commit()
+            conn.close()
+        except sqlite3.Error as e:
+            raise RepositoryError(f"Failed to save event version: {e}")
+
+    def get_audit_log(self, event_id: str) -> list[EventAuditEntry]:
+        """Get audit trail for an event."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM event_audit_log WHERE event_id = ? ORDER BY timestamp ASC",
+                (event_id,),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            return [
+                EventAuditEntry(
+                    audit_id=UUID(row["audit_id"]),
+                    event_id=UUID(row["event_id"]),
+                    version=int(row["version"]),
+                    action=row["action"],
+                    origin=EventOrigin(row["origin"]),
+                    changes=json.loads(row["changes"] or "{}"),
+                    actor=row["actor"],
+                    timestamp=datetime.fromisoformat(row["timestamp"]),
+                    note=row["note"],
+                )
+                for row in rows
+            ]
+        except sqlite3.Error as e:
+            raise RepositoryError(f"Failed to get audit log: {e}")
+
+    def get_event_versions(self, event_id: str) -> list[EventVersion]:
+        """Get all version snapshots for an event."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM event_versions WHERE event_id = ? ORDER BY version ASC",
+                (event_id,),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            return [
+                EventVersion(
+                    version_id=UUID(row["version_id"]),
+                    event_id=UUID(row["event_id"]),
+                    version=int(row["version"]),
+                    origin=EventOrigin(row["origin"]),
+                    snapshot=json.loads(row["snapshot"]),
+                    created_at=datetime.fromisoformat(row["created_at"]),
+                )
+                for row in rows
+            ]
+        except sqlite3.Error as e:
+            raise RepositoryError(f"Failed to get event versions: {e}")
+
+    def count_events_by_review_status(self) -> dict[str, int]:
+        """Count events grouped by review_status."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT COALESCE(review_status, 'needs_review') as rs, COUNT(*) as cnt FROM events GROUP BY rs"
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            return {row["rs"]: row["cnt"] for row in rows}
+        except sqlite3.Error as e:
+            raise RepositoryError(f"Failed to count events by review status: {e}")

@@ -53,7 +53,7 @@ def build_candidates_use_case(
     if source_id is None:
         # Backward compatibility: default to Slack
         new_messages = cast(
-            list[MessageRecord], repository.get_new_messages_for_candidates()
+            "list[MessageRecord]", repository.get_new_messages_for_candidates()
         )
     else:
         # Use source-agnostic method

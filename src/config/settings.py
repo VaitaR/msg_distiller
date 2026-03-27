@@ -42,7 +42,7 @@ LLM_CACHE_TTL_DAYS_DEFAULT: Final[int] = 21
 TELEGRAM_FETCH_PAGE_SIZE_DEFAULT: Final[int] = 200
 TELEGRAM_RATE_LIMIT_DELAY_SECONDS_DEFAULT: Final[float] = 1.0
 
-logger = cast(Any, get_logger(__name__))
+logger = cast("Any", get_logger(__name__))
 
 
 def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:

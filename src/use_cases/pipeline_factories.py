@@ -75,7 +75,7 @@ def create_slack_ingestion_handlers(
     """Build callables used by :class:`~src.workers.pipeline.IngestWorker`."""
 
     def ingest_messages(*, correlation_id: str | None) -> IngestResult:
-        client = cast(WrappedSlackClient, slack_client)
+        client = cast("WrappedSlackClient", slack_client)
         return ingest_messages_use_case(
             slack_client=client,
             repository=repository,
@@ -190,10 +190,10 @@ def create_digest_handler(
 
 __all__ = [
     "CandidateBuilder",
-    "LLMScheduler",
-    "LLMCandidateProcessor",
-    "LLMWorkerComponents",
     "IngestCallable",
+    "LLMCandidateProcessor",
+    "LLMScheduler",
+    "LLMWorkerComponents",
     "create_deduplication_handler",
     "create_digest_handler",
     "create_llm_candidate_processor",

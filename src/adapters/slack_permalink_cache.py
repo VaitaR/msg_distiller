@@ -19,7 +19,7 @@ GetConnCallable = Callable[[], AbstractContextManager[Any]]
 def _is_sqlite_connection(conn: Any) -> bool:
     """Return True if the connection comes from sqlite3."""
 
-    module_name = cast(str, getattr(conn.__class__, "__module__", ""))
+    module_name = cast("str", getattr(conn.__class__, "__module__", ""))
     return module_name.startswith("sqlite3")
 
 
@@ -56,14 +56,14 @@ class SlackPermalinkCache:
                         """,
                         (channel_id, ts),
                     )
-                row = cast(tuple[Any, ...] | None, cursor.fetchone())
+                row = cast("tuple[Any, ...] | None", cursor.fetchone())
             finally:
                 cursor.close()
 
         if not row:
             return None
 
-        return cast(str, row[0])
+        return cast("str", row[0])
 
     def put(self, channel_id: str, ts: str, url: str) -> None:
         """Persist permalink for future lookups."""

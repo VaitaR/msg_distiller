@@ -143,7 +143,9 @@ class SlackClient:
         attempt = 0
         while True:
             try:
-                return cast(dict[str, Any], self.client.conversations_history(**params))
+                return cast(
+                    "dict[str, Any]", self.client.conversations_history(**params)
+                )
             except SlackApiError as error:
                 if error.response.get("error") == "ratelimited":
                     retry_after = int(error.response.headers.get("Retry-After", 10))

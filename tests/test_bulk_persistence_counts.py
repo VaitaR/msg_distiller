@@ -107,6 +107,12 @@ def _create_event_values(index: int) -> tuple[object, ...]:
         importance,
         cluster_key,
         dedup_key,
+        # Review lifecycle fields
+        "needs_review",
+        None,
+        None,
+        1,
+        "ai_extraction",
     )
 
 
@@ -162,7 +168,12 @@ def test_bulk_upsert_statement_counts(record_count: int) -> None:
             confidence REAL,
             importance INTEGER,
             cluster_key TEXT,
-            dedup_key TEXT UNIQUE
+            dedup_key TEXT UNIQUE,
+            review_status TEXT DEFAULT 'needs_review',
+            reviewed_by TEXT,
+            reviewed_at TEXT,
+            version INTEGER DEFAULT 1,
+            origin TEXT DEFAULT 'ai_extraction'
         )
         """
     )

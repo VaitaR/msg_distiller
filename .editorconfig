@@ -21,3 +21,14 @@ indent_style = tab
 
 [*.md]
 trim_trailing_whitespace = false
+
+[*.toml]
+indent_style = space
+indent_size = 2
+
+[justfile]
+indent_style = space
+indent_size = 4
+
+[Dockerfile]
+indent_size = 4

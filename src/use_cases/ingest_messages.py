@@ -621,7 +621,7 @@ def ingest_messages_use_case(
 
                     channels_processed.append(channel_id)
                 except Exception as e:
-                    error_msg = f"Channel {channel_id}: {str(e)}"
+                    error_msg = f"Channel {channel_id}: {e!s}"
                     errors.append(error_msg)
 
             return IngestResult(

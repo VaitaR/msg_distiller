@@ -21,7 +21,7 @@ JSONDict = dict[str, Any]
 def _is_sqlite_connection(conn: Any) -> bool:
     """Return True if the connection comes from sqlite3."""
 
-    module_name = cast(str, getattr(conn.__class__, "__module__", ""))
+    module_name = cast("str", getattr(conn.__class__, "__module__", ""))
     return module_name.startswith("sqlite3")
 
 
@@ -52,16 +52,16 @@ class SlackUsersCache:
                         "SELECT profile_json FROM slack_users_cache WHERE user_id = %s",
                         (user_id,),
                     )
-                row = cast(tuple[Any, ...] | None, cursor.fetchone())
+                row = cast("tuple[Any, ...] | None", cursor.fetchone())
             finally:
                 cursor.close()
 
         if not row:
             return None
 
-        payload = cast(str, row[0])
+        payload = cast("str", row[0])
         try:
-            return cast(dict[str, Any], json.loads(payload))
+            return cast("dict[str, Any]", json.loads(payload))
         except json.JSONDecodeError:
             logger.warning("slack_users_cache_invalid_json", user_id=user_id)
             return None

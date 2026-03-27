@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "slack-event-manager"
 version = "0.0.0"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.13.0",
     "httpx>=0.27.0",
@@ -23,9 +23,17 @@ dependencies = [
     "qrcode[pil]>=7.4.0",
     "rapidfuzz>=3.6.0",
     "slack-sdk>=3.27.0",
-    "streamlit>=1.29.0",
     "structlog>=24.1.0",
     "telethon>=1.41.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "dash>=2.18.0",
+    "dash-bootstrap-components>=1.6.0",
+    "opentelemetry-api>=1.27.0",
+    "opentelemetry-sdk>=1.27.0",
+    "opentelemetry-instrumentation-fastapi>=0.48b0",
+    "numpy>=1.26.0",
+    "pandas>=2.1.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -43,6 +51,9 @@ dev-dependencies = [
     "pytest-timeout==2.2.0",
     "requests>=2.31.0",
     "ruff==0.12.8",
+    "httpx>=0.27.0",
+    "playwright>=1.48.0",
+    "pytest-playwright>=0.5.2",
     "types-jsonschema==4.21.0.20240331",
     "types-python-dateutil==2.8.19.20240106",
     "types-pytz==2024.1.0.20240203",
@@ -52,7 +63,7 @@ dev-dependencies = [
 
 [tool.ruff]
 line-length = 88
-target-version = "py311"
+target-version = "py312"
 # (если используете ruff как форматтер)
 # [tool.ruff.format]
 # quote-style = "double"
@@ -60,6 +71,7 @@ target-version = "py311"
 [tool.ruff.lint]
 select = [
     "E","F","I","N","W","UP","PLR","PLC",
+    "B","SIM","RUF","PT","C4","PIE",
 ]
 ignore = [
     "E501",    # длина строки форматтером
@@ -73,10 +85,11 @@ ignore = [
 "src/use_cases/*.py" = ["PLR2004"]
 "scripts/*.py" = ["E402", "E722", "PLR2004"]
 "src/adapters/postgres_repository.py" = ["N812"]
+"src/api/*.py" = ["B008"]  # FastAPI Depends/Query in defaults is idiomatic
 "alembic/env.py" = ["E402"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
@@ -104,6 +117,12 @@ module = [
     "psycopg2.*",
     "alembic.*",
     "prometheus_client.*",
+    "fastapi.*",
+    "uvicorn.*",
+    "dash.*",
+    "dash_bootstrap_components.*",
+    "opentelemetry.*",
+    "plotly.*",
 ]
 ignore_missing_imports = true
 

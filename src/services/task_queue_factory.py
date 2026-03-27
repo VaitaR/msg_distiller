@@ -36,7 +36,7 @@ def resolve_task_queue(repository: RepositoryProtocol) -> TaskQueuePort:
         raise TaskQueueUnavailableError(
             "Task queue is not supported by this repository"
         ) from exc
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.exception(
             "task_queue_resolution_failed", repository=type(repository).__name__
         )

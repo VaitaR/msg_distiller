@@ -702,7 +702,7 @@ async def ingest_telegram_messages_use_case_async(
             channels_processed.append(channel_id)
 
         except Exception as e:
-            error_msg = f"Channel {channel_id}: {str(e)}"
+            error_msg = f"Channel {channel_id}: {e!s}"
             errors.append(error_msg)
             logger.error(
                 "Telegram ingestion error",

@@ -19,11 +19,40 @@ def _utcnow() -> datetime:
     return datetime.now(tz=UTC)
 
 
+# ---------------------------------------------------------------------------
+# Enums
+# ---------------------------------------------------------------------------
+
+
 class MessageSource(str, Enum):
     """Message source type."""
 
     SLACK = "slack"
     TELEGRAM = "telegram"
+
+
+class ReviewLifecycleStatus(str, Enum):
+    """Review lifecycle status for extracted events.
+
+    Separate from EventStatus (which describes what happened in the real world)
+    and CandidateStatus (which describes pipeline processing).
+    This tracks human review / publication workflow.
+    """
+
+    NEEDS_REVIEW = "needs_review"
+    APPROVED = "approved"
+    PUBLISHED = "published"
+    REJECTED = "rejected"
+    ARCHIVED = "archived"
+
+
+class EventOrigin(str, Enum):
+    """Origin of an event version — who/what created it."""
+
+    AI_EXTRACTION = "ai_extraction"
+    HUMAN_EDIT = "human_edit"
+    HUMAN_REVIEW = "human_review"
+    SYSTEM_MERGE = "system_merge"
 
 
 class MessageSourceConfig(BaseModel):
@@ -565,6 +594,21 @@ class Event(BaseModel):
         default=MessageSource.SLACK, description="Message source (slack, telegram)"
     )
 
+    # 3.9 Review Lifecycle
+    version: int = Field(default=1, ge=1, description="Monotonic version number")
+    origin: EventOrigin = Field(
+        default=EventOrigin.AI_EXTRACTION,
+        description="Who/what produced this version",
+    )
+    review_status: ReviewLifecycleStatus = Field(
+        default=ReviewLifecycleStatus.NEEDS_REVIEW,
+        description="Review workflow status",
+    )
+    reviewed_by: str | None = Field(default=None, description="User ID of reviewer")
+    reviewed_at: datetime | None = Field(
+        default=None, description="UTC timestamp of review action"
+    )
+
     @field_validator("qualifiers")
     @classmethod
     def validate_qualifiers(cls, v: list[str]) -> list[str]:
@@ -765,3 +809,51 @@ class DigestResult(BaseModel):
     messages_posted: int
     events_included: int
     channel: str
+
+
+# ---------------------------------------------------------------------------
+# Review / Audit models
+# ---------------------------------------------------------------------------
+
+
+class EventAuditEntry(BaseModel):
+    """Append-only audit log for event changes.
+
+    Tracks every modification (AI extraction, human edit, review decision)
+    with a diff of changed fields.
+    """
+
+    audit_id: UUID = Field(default_factory=uuid4, description="Unique audit entry ID")
+    event_id: UUID = Field(..., description="FK to Event")
+    version: int = Field(..., ge=1, description="Event version this entry refers to")
+    action: str = Field(
+        ...,
+        description="Action performed: created | edited | approved | rejected | published | archived",
+    )
+    origin: EventOrigin = Field(..., description="Who initiated: ai/human/system")
+    changes: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Diff: {field: {old: ..., new: ...}}",
+    )
+    actor: str = Field(
+        default="pipeline",
+        description="User ID or 'pipeline' / 'system'",
+    )
+    timestamp: datetime = Field(default_factory=_utcnow, description="When it happened")
+    note: str | None = Field(default=None, description="Optional human comment")
+
+
+class EventVersion(BaseModel):
+    """Full snapshot of an Event at a point in time (append-only).
+
+    Allows restoring any historical state of an event.
+    """
+
+    version_id: UUID = Field(default_factory=uuid4, description="Unique snapshot ID")
+    event_id: UUID = Field(..., description="FK to Event")
+    version: int = Field(..., ge=1, description="Version number")
+    origin: EventOrigin = Field(..., description="Who produced this version")
+    snapshot: dict[str, Any] = Field(
+        ..., description="Full Event model_dump() at this version"
+    )
+    created_at: datetime = Field(default_factory=_utcnow)

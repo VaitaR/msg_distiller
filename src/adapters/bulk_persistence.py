@@ -84,6 +84,12 @@ class EventDTO:
             event.importance,
             event.cluster_key,
             event.dedup_key,
+            # Review lifecycle fields
+            event.review_status.value,
+            event.reviewed_by,
+            _serialize_datetime(event.reviewed_at),
+            event.version,
+            event.origin.value,
         )
         return cls(backend=backend, connection=connection, values=values)
 
@@ -196,7 +202,8 @@ def _postgres_events_batch(
             planned_start, planned_end, actual_start, actual_end,
             time_source, time_confidence,
             summary, why_it_matters, links, anchors, impact_area, impact_type,
-            confidence, importance, cluster_key, dedup_key
+            confidence, importance, cluster_key, dedup_key,
+            review_status, reviewed_by, reviewed_at, version, origin
         ) VALUES (
             %s, %s, %s, %s, %s, %s,
             %s, %s, %s, %s, %s, %s,
@@ -204,7 +211,8 @@ def _postgres_events_batch(
             %s, %s, %s, %s,
             %s, %s,
             %s, %s, %s, %s, %s, %s,
-            %s, %s, %s, %s
+            %s, %s, %s, %s,
+            %s, %s, %s, %s, %s
         )
         ON CONFLICT (dedup_key) DO UPDATE SET
             message_id = EXCLUDED.message_id,
@@ -237,7 +245,12 @@ def _postgres_events_batch(
             impact_type = EXCLUDED.impact_type,
             confidence = EXCLUDED.confidence,
             importance = EXCLUDED.importance,
-            cluster_key = EXCLUDED.cluster_key
+            cluster_key = EXCLUDED.cluster_key,
+            review_status = EXCLUDED.review_status,
+            reviewed_by = EXCLUDED.reviewed_by,
+            reviewed_at = EXCLUDED.reviewed_at,
+            version = EXCLUDED.version,
+            origin = EXCLUDED.origin
     """
 
     try:
@@ -265,7 +278,8 @@ def _sqlite_events_batch(
             planned_start, planned_end, actual_start, actual_end,
             time_source, time_confidence,
             summary, why_it_matters, links, anchors, impact_area, impact_type,
-            confidence, importance, cluster_key, dedup_key
+            confidence, importance, cluster_key, dedup_key,
+            review_status, reviewed_by, reviewed_at, version, origin
         ) VALUES (
             ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
@@ -273,7 +287,8 @@ def _sqlite_events_batch(
             ?, ?, ?, ?,
             ?, ?,
             ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?
+            ?, ?, ?, ?,
+            ?, ?, ?, ?, ?
         )
     """
 
@@ -356,6 +371,6 @@ __all__ = [
     "DatabaseBackend",
     "EventDTO",
     "RelationDTO",
-    "upsert_events_bulk",
     "upsert_event_relations_bulk",
+    "upsert_events_bulk",
 ]

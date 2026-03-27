@@ -1,84 +1,98 @@
 # AGENTS.md
 
-Updated: 2026-02-09
+Updated: 2026-03-28
 
 This file is the contributor/agent handbook for the current codebase.
 
 ## What This Project Is
 
-Slack Event Manager is now a **multi-source** event extraction system:
+Slack Event Manager is a **multi-source** event extraction and review system:
 - Slack source
 - Telegram source
 
-It ingests messages, builds scored candidates, extracts structured events with LLM, deduplicates, and publishes digest summaries to Slack.
+It ingests messages, builds scored candidates, extracts structured events with LLM, deduplicates, supports human review/edit workflow, and publishes events to a timeline and API.
+
+**Tech stack**: Python 3.12, uv, ruff, pytest, structlog, FastAPI, Dash+Plotly, Pydantic v2, OpenTelemetry, SQLite/PostgreSQL.
 
 ## Architecture Snapshot
 
+### Layers (inside → outside)
+
+1. **`src/domain`** — Models, enums, protocols (zero I/O)
+2. **`src/use_cases`** — Business orchestration
+3. **`src/services`** — Stateless helpers (scoring, dedup, title rendering)
+4. **`src/adapters`** — DB repos, clients, LLM (implements protocols)
+5. **`src/api`** — FastAPI backend (events CRUD, timeline, review)
+6. **`src/presentation/dash_app`** — Dash UI (reads only via API)
+7. **`src/workers`** — Queue worker runtime
+8. **`src/observability`** — Metrics and tracing
+
 ### Domain & Source Model
 - `MessageSource` enum: `slack`, `telegram` (`src/domain/models.py`)
-- Source-aware models:
-  - `SlackMessage`
-  - `TelegramMessage`
-  - `EventCandidate.source_id`
-  - `Event.source_id`
+- `ReviewLifecycleStatus` enum: `needs_review → approved → published → rejected → archived`
+- `EventOrigin` enum: `ai_extraction`, `human_edit`, `human_review`, `system_merge`
+- `EventAuditEntry` — append-only audit log
+- `EventVersion` — full snapshot history
 
 ### Configuration
-- Main settings are merged from `config/*.yaml` and env vars in `Settings` (`src/config/settings.py`)
+- Main settings merged from `config/*.yaml` and env vars in `Settings` (`src/config/settings.py`)
 - Multi-source config exposed as `message_sources`
-- Backward compatibility migration exists from legacy `channels` + `telegram_channels`
 
 ### Data Access
 - Repository factory: SQLite/PostgreSQL (`src/adapters/repository_factory.py`)
-- Source-aware repository methods for ingestion/candidates/events
-- Per-source raw/state handling in both repository implementations
+- Review lifecycle methods: `get_events_for_review`, `update_event_review`, `update_event_fields`, audit/version persistence
+
+### API Layer
+- FastAPI app: `src/api/app.py`
+- Events endpoints: `src/api/routes_events.py`
+- Schemas: `src/api/schemas.py`
+- Run: `python scripts/run_api_server.py` or `just api`
+
+### Presentation Layer
+- Dash UI: `src/presentation/dash_app/`
+- Review queue, timeline views, callbacks
+- Run: `python scripts/run_dash.py` or `just dash`
 
 ### Orchestration
-- Direct multi-source runner: `scripts/run_multi_source_pipeline.py`
-- Legacy Slack-only runner: `scripts/run_pipeline.py`
-- Queue-based runtime:
-  - Scheduler: `scripts/run_pipeline_scheduler.py`
-  - Workers: ingest / extraction scheduler / llm / dedup scripts
-
-### Message Clients
-- Slack client adapter (`src/adapters/slack_client.py`)
-- Telegram client adapter (`src/adapters/telegram_client.py`)
-- Client factory by source (`src/adapters/message_client_factory.py`)
+- Multi-source runner: `scripts/run_multi_source_pipeline.py`
+- Queue-based workers: ingest / extraction / llm / dedup scripts
 
 ## Recommended Runtime Paths
 
-### Local development
-Use direct multi-source orchestrator:
+### Local development — quick start
 
 ```bash
-python scripts/run_multi_source_pipeline.py
+just sync            # Install deps
+just api             # Start API server (port 8000)
+just dash            # Start Dash UI (port 8050)
 ```
 
-### Source-specific execution
+### Pipeline execution
 
 ```bash
-python scripts/run_multi_source_pipeline.py --source slack
-python scripts/run_multi_source_pipeline.py --source telegram
+just pipeline                           # Run all sources
+just pipeline --source slack            # Slack only
+just pipeline --source telegram         # Telegram only
 ```
 
-### Production-style queue mode
+### Full quality check
 
 ```bash
-python scripts/run_pipeline_scheduler.py --interval-seconds 300
-python scripts/run_ingest_worker.py
-python scripts/run_extraction_worker.py
-python scripts/run_llm_worker.py
-python scripts/run_dedup_worker.py
+just ci              # format-check + lint + typecheck + test
 ```
 
-Important:
-- Queue ingest composition is currently Slack-oriented (`create_slack_ingestion_handlers` in `src/use_cases/pipeline_factories.py`).
-- For complete multi-source end-to-end processing in one command, use `run_multi_source_pipeline.py`.
+### Production-style (Docker)
+
+```bash
+docker compose build && docker compose up -d
+# Services: postgres, api-server, dash-ui, pipeline-scheduler, workers
+```
 
 ## Setup Commands
 
 ```bash
 pip install uv
-make sync-dev
+just sync                    # or: make sync-dev
 ./scripts/setup_config.sh
 ```
 
@@ -92,18 +106,43 @@ Then edit local configs and secrets:
 ## Testing & Quality Gates
 
 ```bash
-make test-quick
-make test-cov
-make format-check
-make lint
-make typecheck
-make ci
+just test            # Unit + integration (excl. postgres/telegram)
+just test-api        # API tests only
+just test-e2e        # Playwright e2e (SKIP_E2E=0 + seeded servers on ports 18000/18050)
+just test-cov        # With coverage
+just ci              # Full CI: fmt-check + lint + typecheck + test
 ```
+
+### Test seed data
+
+`tests/factories.py` is the single source of truth for **15 deterministic seed events** used at every test layer:
+
+| IDs | Status | Source |
+|-----|--------|--------|
+| 1-5 | `needs_review` | slack (#1-3), telegram (#4-5) |
+| 6-8 | `approved` | slack (#6-7), telegram (#8) |
+| 9-11 | `published` | slack (#9), telegram (#10-11) |
+| 12-13 | `rejected` | slack (#12), telegram (#13) |
+| 14-15 | `archived` | slack (#14), telegram (#15) |
+
+Key exports: `SEED_EVENTS`, `SEED_COUNTS`, `NEEDS_REVIEW_IDS`, `APPROVED_IDS`, `PUBLISHED_IDS`.
+
+### Test fixtures
+
+- `seeded_db` (function-scoped) — fresh isolated SQLite DB per test; yields `(db_path, events)`.
+- `seeded_db_session` (session-scoped) — shared DB across a test session (used by e2e servers).
+- `seeded_api_client` — FastAPI `TestClient` with `dependency_overrides[get_repo]` pointing at the seeded DB.
+
+### E2e server setup
+
+E2e tests start isolated subprocess servers on **ports 18000 (API) and 18050 (Dash)** using the session-scoped seeded DB. `SKIP_E2E=0` must be set — `just test-e2e` sets it automatically. `scripts/run_dash.py` uses `threaded=True` to handle concurrent requests during tests.
 
 Tooling in use:
 - Ruff (format + lint)
 - mypy (type checks)
 - pytest
+- Playwright (e2e, chromium)
+- pre-commit
 
 ## Configuration Truths
 
@@ -118,6 +157,8 @@ Tooling in use:
 - `src/domain`: canonical business model and protocols
 - `src/use_cases`: application orchestration boundaries
 - `src/adapters`: external interfaces and persistence
+- `src/api`: FastAPI REST endpoints, schemas, DI
+- `src/presentation/dash_app`: Dash UI layouts and callbacks
 - `src/workers`: queue worker runtime behavior
 - `scripts`: executable operational entry points
 
@@ -132,11 +173,12 @@ Tooling in use:
 
 `docker-compose.yml` provisions:
 - PostgreSQL
+- API server (FastAPI, port 8000)
+- Dash UI (port 8050)
 - Pipeline scheduler
 - Telegram worker
 - Ingest/extraction/llm/dedup workers
 - Metrics exporter
-- Streamlit UI
 
 Start:
 

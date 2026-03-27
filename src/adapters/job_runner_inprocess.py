@@ -127,7 +127,7 @@ class InProcessJobRunner(JobRunnerPort):
         start_time = time.perf_counter()
         try:
             result = handler(params, reporter)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             duration = time.perf_counter() - start_time
             JOB_DURATION_SECONDS.labels(job=self._jobs[job_id].name).observe(duration)
             logger.exception("job_failed", job_id=job_id)
