@@ -1416,13 +1416,13 @@ class SQLiteRepository:
             order_clause = criteria.to_order_clause()
             limit_clause, limit_params = criteria.to_limit_clause()
 
-            # Combine into full query
+            # Combine into full query (convert %s → ? for SQLite)
             query = f"""
                 SELECT * FROM events
                 WHERE {where_clause}
                 ORDER BY {order_clause}
                 {limit_clause}
-            """
+            """.replace("%s", "?")
 
             # Execute with all parameters
             all_params = where_params + limit_params
@@ -1461,13 +1461,13 @@ class SQLiteRepository:
             order_clause = criteria.to_order_clause()
             limit_clause, limit_params = criteria.to_limit_clause()
 
-            # Combine into full query
+            # Combine into full query (convert %s → ? for SQLite)
             query = f"""
                 SELECT * FROM event_candidates
                 WHERE {where_clause}
                 ORDER BY {order_clause}
                 {limit_clause}
-            """
+            """.replace("%s", "?")
 
             # Execute with all parameters
             all_params = where_params + limit_params
