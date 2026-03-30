@@ -11,7 +11,14 @@ import pytz
 from src.adapters.query_builders import EventQueryCriteria
 from src.config.logging_config import get_logger
 from src.config.settings import Settings
-from src.domain.models import DeduplicationResult, Event, MessageSource
+from src.domain.models import (
+    DeduplicationResult,
+    Event,
+    EventAuditEntry,
+    EventOrigin,
+    MessageSource,
+    ReviewLifecycleStatus,
+)
 from src.domain.protocols import RepositoryProtocol
 from src.observability.metrics import PIPELINE_STAGE_DURATION_SECONDS
 from src.observability.tracing import correlation_scope
@@ -95,7 +102,7 @@ def deduplicate_events_use_case(
                 )
                 return result
 
-            deduplicated_events = deduplicator.deduplicate_event_list(
+            deduplicated_events, absorbed_events = deduplicator.deduplicate_event_list(
                 all_events,
                 date_window_hours=settings.dedup_date_window_hours,
                 title_similarity_threshold=settings.dedup_title_similarity,
@@ -103,6 +110,7 @@ def deduplicate_events_use_case(
             )
 
             final_count = len(deduplicated_events)
+            # Count all events that didn't survive (explicit merges + dedup_key dupes)
             merged_count = initial_count - final_count
 
             if deduplicated_events:
@@ -122,6 +130,30 @@ def deduplicate_events_use_case(
                     validated_events.append(event)
 
                 repository.save_events(validated_events)
+
+            # Archive absorbed events and write audit trail
+            for absorbed in absorbed_events:
+                absorbed_id = str(absorbed.event_id)
+                repository.update_event_review(
+                    event_id=absorbed_id,
+                    review_status=ReviewLifecycleStatus.ARCHIVED,
+                    reviewed_by="system_dedup",
+                )
+                repository.save_audit_entry(
+                    EventAuditEntry(
+                        event_id=absorbed.event_id,
+                        version=absorbed.version,
+                        action="archived_by_merge",
+                        origin=EventOrigin.SYSTEM_MERGE,
+                        changes={"reason": "absorbed_by_dedup"},
+                        actor="system_dedup",
+                    )
+                )
+                logger.info(
+                    "dedup_event_absorbed",
+                    correlation_id=bound_correlation_id,
+                    absorbed_event_id=absorbed_id,
+                )
 
             result = DeduplicationResult(
                 new_events=final_count,

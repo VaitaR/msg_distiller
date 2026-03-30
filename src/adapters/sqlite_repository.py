@@ -2389,3 +2389,55 @@ class SQLiteRepository:
             return {row["rs"]: row["cnt"] for row in rows}
         except sqlite3.Error as e:
             raise RepositoryError(f"Failed to count events by review status: {e}")
+    def get_event_relations(
+        self,
+        event_id: str,
+        relation_type: str | None = None,
+    ) -> list[tuple[str, str]]:
+        """Get relations originating from an event."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            if relation_type is not None:
+                cursor.execute(
+                    "SELECT relation_type, target_event_id FROM event_relations"
+                    " WHERE source_event_id = ? AND relation_type = ?",
+                    (event_id, relation_type),
+                )
+            else:
+                cursor.execute(
+                    "SELECT relation_type, target_event_id FROM event_relations"
+                    " WHERE source_event_id = ?",
+                    (event_id,),
+                )
+            rows = cursor.fetchall()
+            conn.close()
+            return [(row["relation_type"], row["target_event_id"]) for row in rows]
+        except sqlite3.Error as e:
+            raise RepositoryError(f"Failed to get event relations: {e}")
+
+    def delete_event_relations(
+        self,
+        event_id: str,
+        relation_type: str | None = None,
+    ) -> int:
+        """Delete relations originating from an event."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            if relation_type is not None:
+                cursor.execute(
+                    "DELETE FROM event_relations WHERE source_event_id = ? AND relation_type = ?",
+                    (event_id, relation_type),
+                )
+            else:
+                cursor.execute(
+                    "DELETE FROM event_relations WHERE source_event_id = ?",
+                    (event_id,),
+                )
+            count = cursor.rowcount
+            conn.commit()
+            conn.close()
+            return count
+        except sqlite3.Error as e:
+            raise RepositoryError(f"Failed to delete event relations: {e}")

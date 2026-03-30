@@ -21,8 +21,9 @@ from src.domain.deduplication_constants import (
     DEFAULT_DATE_WINDOW_HOURS,
     DEFAULT_TITLE_SIMILARITY,
     SAME_MESSAGE_NO_MERGE,
+    SEMANTIC_TITLE_SIMILARITY,
 )
-from src.domain.models import Event
+from src.domain.models import Event, EventRelation, RelationType
 from src.services.title_renderer import TitleRenderer
 
 _DEFAULT_TITLE_RENDERER = TitleRenderer()
@@ -128,31 +129,33 @@ def should_merge_events(
 ) -> bool:
     """Determine if two events should be merged.
 
+    Two merge paths:
+    1. **Anchor path** (standard): events share anchor/link overlap + date window
+       + rendered-title similarity ≥ threshold (0.80).
+    2. **Semantic path** (fallback): no anchor overlap, but object_name_raw
+       token-set similarity ≥ SEMANTIC_TITLE_SIMILARITY (0.85). Catches same-
+       initiative announcements posted without Jira/PR references.
+
     Rules:
     - Same message_id: NO merge (Rule 1)
-    - Different message_id:
-      - Must have anchor/link overlap
-      - Date delta <= window
-      - Optional: cluster_key similarity (same initiative)
+    - Different source_id: NO merge
+    - Date delta > date_window_hours: NO merge (applied on both paths)
 
     Args:
         event1: First event
         event2: Second event
         date_window_hours: Maximum date difference in hours (default: 48)
-        title_similarity_threshold: Minimum fuzzy similarity 0.0-1.0 (default: 0.8, currently unused)
+        title_similarity_threshold: Fuzzy similarity for anchor path (default: 0.8)
+        title_renderer: Optional title renderer instance
 
     Returns:
         True if events should merge
 
     Example:
-        >>> evt1 = Event(message_id="m1", cluster_key="abc...", ...)
-        >>> evt2 = Event(message_id="m2", cluster_key="abc...", ...)
-        >>> should_merge_events(evt1, evt2)
+        >>> evt1 = Event(message_id="m1", object_name_raw="loyalty program in Wallet", ...)
+        >>> evt2 = Event(message_id="m2", object_name_raw="wallet loyalty program v1.0", ...)
+        >>> should_merge_events(evt1, evt2)  # semantic path, no anchors
         True
-
-    Note:
-        Default values come from src.domain.deduplication_constants.
-        In production, pass values from Settings configuration.
     """
     # Rule 1: Same message_id = NO merge
     if SAME_MESSAGE_NO_MERGE and event1.message_id == event2.message_id:
@@ -162,14 +165,7 @@ def should_merge_events(
     if event1.source_id != event2.source_id:
         return False
 
-    # Check anchor/link overlap
-    combined_anchors1 = event1.anchors + event1.links
-    combined_anchors2 = event2.anchors + event2.links
-
-    if not has_overlap(combined_anchors1, combined_anchors2):
-        return False
-
-    # Get primary times
+    # Check time delta first (applies to both merge paths)
     time1 = (
         event1.actual_start
         or event1.actual_end
@@ -182,44 +178,67 @@ def should_merge_events(
         or event2.planned_start
         or event2.planned_end
     )
-
-    # Check time delta if both have times
     if time1 and time2:
         date_delta = abs((time1 - time2).total_seconds() / 3600)
         if date_delta > date_window_hours:
             return False
 
+    # Check anchor/link overlap
+    combined_anchors1 = event1.anchors + event1.links
+    combined_anchors2 = event2.anchors + event2.links
+    has_anchor_overlap = has_overlap(combined_anchors1, combined_anchors2)
+
     renderer = title_renderer or _DEFAULT_TITLE_RENDERER
-    title1 = renderer.render_canonical_title(event1)
-    title2 = renderer.render_canonical_title(event2)
-    similarity: float = fuzz.ratio(title1, title2) / 100.0
 
-    return similarity >= title_similarity_threshold
+    if has_anchor_overlap:
+        # --- Anchor path (standard) ---
+        title1 = renderer.render_canonical_title(event1)
+        title2 = renderer.render_canonical_title(event2)
+        similarity: float = fuzz.ratio(title1, title2) / 100.0
+        return similarity >= title_similarity_threshold
+    elif not combined_anchors1 and not combined_anchors2:
+        # --- Semantic path (fallback, stricter threshold) ---
+        # Only fires when NEITHER event has any anchor or link: if they have
+        # different non-overlapping Jira/PR/URL anchors they are likely
+        # separate tickets and should NOT be auto-merged.
+        # e.g. "loyalty program in Wallet" vs "wallet loyalty program v1.0"
+        raw_sim: float = fuzz.token_set_ratio(
+            event1.object_name_raw.lower().strip(),
+            event2.object_name_raw.lower().strip(),
+        ) / 100.0
+        return raw_sim >= SEMANTIC_TITLE_SIMILARITY
+    else:
+        # One or both events have anchors that don't overlap — likely different
+        # tickets; don't merge.
+        return False
 
 
-def merge_events(event1: Event, event2: Event) -> Event:
-    """Merge two events, combining attributes.
+def merge_events(event1: Event, event2: Event) -> tuple[Event, Event]:
+    """Merge two events into (survivor, archived_absorbed).
 
     Strategy:
     - Union: links, source_channels, anchors, impact_area, impact_type
     - Max: confidence, importance
     - Keep: event1's core attributes (title slots, status, times)
-    - Update: qualifiers (union, max 2)
+    - Survivor gets an ABSORBED_FROM relation pointing to event2
+    - event2 is returned as archived with origin=SYSTEM_MERGE
 
     Args:
-        event1: Primary event (keeps core attributes)
-        event2: Secondary event (contributes additional data)
+        event1: Primary event (survivor, keeps core attributes and event_id)
+        event2: Secondary event (absorbed, will be archived)
 
     Returns:
-        Merged event
+        Tuple of (survivor_event, archived_absorbed_event)
 
     Example:
-        >>> evt1 = Event(links=["a"], confidence=0.8, ...)
-        >>> evt2 = Event(links=["b"], confidence=0.9, ...)
-        >>> merged = merge_events(evt1, evt2)
-        >>> set(merged.links)
-        {'a', 'b'}
+        >>> survivor, absorbed = merge_events(evt1, evt2)
+        >>> survivor.relations[0].relation_type
+        RelationType.ABSORBED_FROM
+        >>> absorbed.review_status
+        ReviewLifecycleStatus.ARCHIVED
     """
+    from src.domain.models import EventOrigin, ReviewLifecycleStatus
+
     # Union of lists (deduplicated)
     merged_links = list(set(event1.links + event2.links))[:3]  # Max 3
     merged_channels = list(set(event1.source_channels + event2.source_channels))
@@ -239,6 +258,16 @@ def merge_events(event1: Event, event2: Event) -> Event:
         if t2 is None:
             return t1
         return min(t1, t2)
+
+    # ABSORBED_FROM relation: survivor records which event it absorbed
+    absorbed_relation = EventRelation(
+        relation_type=RelationType.ABSORBED_FROM,
+        target_event_id=event2.event_id,
+    )
+    survivor_relations = [
+        r for r in event1.relations if r.relation_type != RelationType.ABSORBED_FROM
+        or r.target_event_id != event2.event_id
+    ] + [absorbed_relation]
 
     # Create merged event (keeping event1 as base)
     merged = Event(
@@ -281,14 +310,27 @@ def merge_events(event1: Event, event2: Event) -> Event:
         # Clustering (keep event1's)
         cluster_key=event1.cluster_key,
         dedup_key=event1.dedup_key,
-        relations=event1.relations,  # Keep event1's relations
+        relations=survivor_relations,
+        # Review lifecycle: keep event1's status, bump version, mark as system_merge
+        review_status=event1.review_status,
+        reviewed_by=event1.reviewed_by,
+        reviewed_at=event1.reviewed_at,
+        version=event1.version + 1,
+        origin=EventOrigin.SYSTEM_MERGE,
     )
 
     refreshed_key = generate_dedup_key(merged)
     if refreshed_key != merged.dedup_key:
         merged = merged.model_copy(update={"dedup_key": refreshed_key})
 
-    return merged
+    # Create archived copy of the absorbed event
+    archived_absorbed = event2.model_copy(update={
+        "review_status": ReviewLifecycleStatus.ARCHIVED,
+        "origin": EventOrigin.SYSTEM_MERGE,
+        "version": event2.version + 1,
+    })
+
+    return merged, archived_absorbed
 
 
 def find_merge_candidates(
@@ -336,25 +378,26 @@ def deduplicate_event_list(
     date_window_hours: int = DEFAULT_DATE_WINDOW_HOURS,
     title_similarity_threshold: float = DEFAULT_TITLE_SIMILARITY,
     title_renderer: TitleRenderer | None = None,
-) -> list[Event]:
+) -> tuple[list[Event], list[Event]]:
     """Deduplicate a list of events in-memory.
+
+    Returns:
+        Tuple of (survivors, absorbed_events) where absorbed_events have
+        been marked with review_status=ARCHIVED and origin=SYSTEM_MERGE.
+        Both lists must be persisted by the caller.
 
     Args:
         events: List of events to deduplicate
         date_window_hours: Date window
-        title_similarity_threshold: Fuzzy threshold
-
-    Returns:
-        Deduplicated list of events
+        title_similarity_threshold: Fuzzy threshold for anchor path
 
     Example:
-        >>> events = [Event(...), Event(...), Event(...)]
-        >>> deduped = deduplicate_event_list(events)
-        >>> len(deduped) < len(events)
+        >>> survivors, absorbed = deduplicate_event_list(events)
+        >>> len(survivors) + len(absorbed) == len(events)
         True
     """
     if not events:
-        return []
+        return [], []
 
     # Helper to get primary time for sorting
     def get_primary_time(event: Event) -> datetime:
@@ -370,6 +413,7 @@ def deduplicate_event_list(
     sorted_events = sorted(events, key=get_primary_time)
 
     deduplicated: list[Event] = []
+    absorbed_events: list[Event] = []
     processed_dedup_keys: set[str] = set()
 
     for event in sorted_events:
@@ -392,7 +436,8 @@ def deduplicate_event_list(
             deduplicated.remove(target)
             processed_dedup_keys.discard(target.dedup_key)
 
-            merged = merge_events(target, event)
+            merged, archived = merge_events(target, event)
+            absorbed_events.append(archived)
             deduplicated.append(merged)
             processed_dedup_keys.add(merged.dedup_key)
         else:
@@ -400,4 +445,4 @@ def deduplicate_event_list(
             deduplicated.append(event)
             processed_dedup_keys.add(event.dedup_key)
 
-    return deduplicated
+    return deduplicated, absorbed_events

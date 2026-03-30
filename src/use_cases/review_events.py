@@ -12,6 +12,7 @@ from src.domain.models import (
     EventAuditEntry,
     EventOrigin,
     EventVersion,
+    RelationType,
     ReviewLifecycleStatus,
 )
 from src.domain.protocols import RepositoryProtocol
@@ -256,9 +257,111 @@ class ReviewEventsUseCase:
             logger.info("auto_publish_completed", count=count)
         return count
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
+    def unmerge_event(
+        self,
+        survivor_id: str,
+        actor: str,
+    ) -> tuple[bool, list[str]]:
+        """Restore events that were absorbed into this event during dedup merge.
+
+        Steps:
+        1. Look up ABSORBED_FROM relations on the survivor
+        2. For each absorbed event: restore it to needs_review + write audit
+        3. Delete ABSORBED_FROM relations from the survivor
+        4. Write audit entry on the survivor
+
+        Args:
+            survivor_id: UUID string of the merged (survivor) event
+            actor: User or system performing the unmerge
+
+        Returns:
+            (success, list_of_restored_event_ids)
+            success=True even when there is nothing to unmerge (idempotent).
+        """
+        survivor = self._repo.get_event_by_id(survivor_id)
+        if survivor is None:
+            logger.warning("unmerge_survivor_not_found", event_id=survivor_id)
+            return False, []
+
+        relations = self._repo.get_event_relations(
+            survivor_id, relation_type=RelationType.ABSORBED_FROM.value
+        )
+        if not relations:
+            logger.info("unmerge_no_absorbed_events", event_id=survivor_id)
+            return True, []
+
+        now = datetime.now(tz=UTC)
+        restored_ids: list[str] = []
+
+        for _rel_type, absorbed_id in relations:
+            absorbed = self._repo.get_event_by_id(absorbed_id)
+            if absorbed is None:
+                logger.warning(
+                    "unmerge_absorbed_not_found",
+                    absorbed_id=absorbed_id,
+                    survivor_id=survivor_id,
+                )
+                continue
+
+            # Restore: set review_status back to needs_review
+            ok = self._repo.update_event_review(
+                event_id=absorbed_id,
+                review_status=ReviewLifecycleStatus.NEEDS_REVIEW,
+                reviewed_by=actor,
+            )
+            if not ok:
+                logger.warning(
+                    "unmerge_restore_failed",
+                    absorbed_id=absorbed_id,
+                    survivor_id=survivor_id,
+                )
+                continue
+
+            self._write_audit(
+                event=absorbed,
+                action="restored_from_merge",
+                origin=EventOrigin.HUMAN_REVIEW,
+                actor=actor,
+                changes={
+                    "review_status": {
+                        "old": absorbed.review_status.value,
+                        "new": ReviewLifecycleStatus.NEEDS_REVIEW.value,
+                    },
+                    "unmerged_from": survivor_id,
+                },
+                timestamp=now,
+            )
+            restored_ids.append(absorbed_id)
+            logger.info(
+                "unmerge_event_restored",
+                absorbed_id=absorbed_id,
+                survivor_id=survivor_id,
+                actor=actor,
+            )
+
+        # Delete ABSORBED_FROM relations from the survivor
+        self._repo.delete_event_relations(
+            survivor_id, relation_type=RelationType.ABSORBED_FROM.value
+        )
+
+        if restored_ids:
+            self._write_audit(
+                event=survivor,
+                action="unmerged",
+                origin=EventOrigin.HUMAN_REVIEW,
+                actor=actor,
+                changes={"restored_event_ids": restored_ids},
+                timestamp=now,
+            )
+            logger.info(
+                "unmerge_completed",
+                survivor_id=survivor_id,
+                restored_count=len(restored_ids),
+                actor=actor,
+            )
+
+        return True, restored_ids
+
 
     def _write_audit(
         self,

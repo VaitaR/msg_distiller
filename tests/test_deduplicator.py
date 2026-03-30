@@ -152,7 +152,7 @@ def test_merge_events_refreshes_dedup_key() -> None:
         update={"dedup_key": deduplicator.generate_dedup_key(event2)}
     )
 
-    merged = deduplicator.merge_events(event1, event2)
+    merged, _absorbed = deduplicator.merge_events(event1, event2)
 
     assert merged.actual_start == earlier_time
     assert merged.dedup_key == deduplicator.generate_dedup_key(merged)
@@ -320,7 +320,7 @@ def test_merge_events_combines_fields() -> None:
         confidence=0.95,
     )
 
-    merged = deduplicator.merge_events(event1, event2)
+    merged, _absorbed = deduplicator.merge_events(event1, event2)
 
     # Verify combined fields
     assert merged.confidence == 0.95  # Max confidence
@@ -350,7 +350,7 @@ def test_merge_events_prefers_earlier_date() -> None:
         links=["https://example.com"],
     )
 
-    merged = deduplicator.merge_events(event1, event2)
+    merged, _absorbed = deduplicator.merge_events(event1, event2)
 
     assert merged.actual_start == earlier_date
 
@@ -372,7 +372,7 @@ def test_deduplicate_event_list_same_message_no_merge() -> None:
     )
 
     events = [event1, event2]
-    deduplicated = deduplicator.deduplicate_event_list(events)
+    deduplicated, _absorbed = deduplicator.deduplicate_event_list(events)
 
     # Both events should remain
     assert len(deduplicated) == 2
@@ -397,7 +397,7 @@ def test_deduplicate_event_list_merges_similar() -> None:
     )
 
     events = [event1, event2]
-    deduplicated = deduplicator.deduplicate_event_list(events)
+    deduplicated, _absorbed = deduplicator.deduplicate_event_list(events)
 
     # Should merge into 1 event
     assert len(deduplicated) == 1
@@ -432,7 +432,7 @@ def test_deduplicate_event_list_preserves_unique() -> None:
     )
 
     events = [event1, event2, event3]
-    deduplicated = deduplicator.deduplicate_event_list(events)
+    deduplicated, _absorbed = deduplicator.deduplicate_event_list(events)
 
     # All should remain
     assert len(deduplicated) == 3
@@ -441,7 +441,7 @@ def test_deduplicate_event_list_preserves_unique() -> None:
 def test_deduplicate_event_list_empty() -> None:
     """Test deduplication with empty list."""
     events: list[Event] = []
-    deduplicated = deduplicator.deduplicate_event_list(events)
+    deduplicated, _absorbed = deduplicator.deduplicate_event_list(events)
 
     assert deduplicated == []
 
@@ -451,7 +451,7 @@ def test_deduplicate_event_list_single() -> None:
     event = create_test_event()
 
     events = [event]
-    deduplicated = deduplicator.deduplicate_event_list(events)
+    deduplicated, _absorbed = deduplicator.deduplicate_event_list(events)
 
     assert len(deduplicated) == 1
     assert deduplicated[0] == event

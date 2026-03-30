@@ -172,6 +172,29 @@ def review_event(
     return {"status": "ok", "action": body.action, "event_id": event_id}
 
 
+@router.post("/{event_id}/unmerge")
+def unmerge_event(
+    event_id: str,
+    body: ReviewAction,
+    uc: ReviewEventsUseCase = Depends(get_review_use_case),
+) -> dict[str, Any]:
+    """Unmerge absorbed events from a survivor event.
+
+    Restores all events previously absorbed into this event during
+    deduplication. Each restored event is set back to needs_review.
+    The ABSORBED_FROM relations are deleted from the survivor.
+    """
+    ok, restored = uc.unmerge_event(event_id, body.actor)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Event not found")
+    return {
+        "status": "ok",
+        "action": "unmerge",
+        "event_id": event_id,
+        "restored_event_ids": restored,
+    }
+
+
 @router.patch("/{event_id}")
 def patch_event(
     event_id: str,

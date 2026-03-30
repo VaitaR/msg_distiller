@@ -186,6 +186,7 @@ class RelationType(str, Enum):
     RESCHEDULED_FROM = "rescheduled_from"
     CANCELED_OF = "canceled_of"
     UPDATES = "updates"
+    ABSORBED_FROM = "absorbed_from"  # Survivor absorbed another event into itself
 
 
 class ChannelConfig(BaseModel):

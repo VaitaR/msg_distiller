@@ -72,3 +72,21 @@ Example:
       → Message is processed (within 7 days)
       → Event date is 2025-09-01 (can be old, that's OK)
 """
+# Semantic (anchor-free) merge threshold
+SEMANTIC_TITLE_SIMILARITY: Final[float] = 0.85
+"""Higher threshold for semantic (anchor-free) merge path.
+
+When two events share no Jira/PR/link anchors, deduplication falls back
+to comparing object names with token_set_ratio. Because this path is more
+permissive (word-order-insensitive), a stricter threshold reduces false
+positives.
+
+Business rule: Anchor-free events need ≥85% object-name similarity to merge.
+
+Example:
+    - "loyalty program in Wallet" vs "wallet loyalty program v1.0"
+    - token_set_ratio ≈ 0.90 → merge (same initiative, different announcements)
+
+    - "wallet update" vs "wallet loyalty program v1.0"
+    - token_set_ratio ≈ 0.45 → no merge (too different)
+"""

@@ -640,8 +640,39 @@ class RepositoryProtocol(Protocol):
         """
         ...
 
+    def get_event_relations(
+        self,
+        event_id: str,
+        relation_type: str | None = None,
+    ) -> list[tuple[str, str]]:
+        """Get relations originating from an event.
 
-class LLMClientProtocol(Protocol):
+        Args:
+            event_id: Source event UUID string
+            relation_type: Optional filter by RelationType value (e.g. 'absorbed_from').
+                           If None, returns all relation types.
+
+        Returns:
+            List of (relation_type, target_event_id) tuples
+        """
+        ...
+
+    def delete_event_relations(
+        self,
+        event_id: str,
+        relation_type: str | None = None,
+    ) -> int:
+        """Delete relations originating from an event.
+
+        Args:
+            event_id: Source event UUID string
+            relation_type: Optional filter. If None, deletes ALL relations for this source.
+
+        Returns:
+            Number of rows deleted
+        """
+        ...
+
     """Protocol for LLM API interactions."""
 
     def extract_events(
