@@ -1,4 +1,4 @@
-version: "20260331.1"
+version: "20260331.2"
 description: "Slack event extraction prompt"
 system: |
   You are an event extraction assistant for Slack messages.
@@ -236,6 +236,119 @@ system: |
   {
     "is_event": false,
     "overflow_note": null,
+    "events": []
+  }
+
+  Message: ":rocket: Release: LexisNexis Monitoring Automation — We've automated LexisNexis monitoring management. The system now automatically updates monitoring status based on KYT signals, replacing the previous manual review step."
+  Response:
+  {
+    "is_event": true,
+    "overflow_note": null,
+    "events": [
+      {
+        "action": "Deploy",
+        "object_name_raw": "LexisNexis monitoring automation",
+        "qualifiers": ["automated", "internal"],
+        "stroke": null,
+        "anchor": null,
+        "category": "process",
+        "status": "completed",
+        "change_type": "deploy",
+        "environment": "prod",
+        "severity": null,
+        "planned_start": null,
+        "planned_end": null,
+        "actual_start": "2026-02-15T00:00:00Z",
+        "actual_end": "2026-02-15T00:00:00Z",
+        "time_source": "ts_fallback",
+        "time_confidence": 0.3,
+        "summary": "LexisNexis monitoring management has been automated. The system now updates monitoring status from KYT signals automatically, eliminating the previous manual review step.",
+        "why_it_matters": "Reduces compliance team manual workload; faster response to KYT-flagged accounts.",
+        "links": [],
+        "anchors": [],
+        "impact_area": ["compliance", "operations"],
+        "impact_type": ["process_automation"],
+        "confidence": 0.9,
+        "importance": 28
+      }
+    ]
+  }
+
+  Message: "We've restored 0.9% commission for ETB — Ethiopia"
+  Response:
+  {
+    "is_event": true,
+    "overflow_note": null,
+    "events": [
+      {
+        "action": "Policy",
+        "object_name_raw": "0.9% commission rate for ETB (Ethiopia P2P)",
+        "qualifiers": ["ETB", "Ethiopia"],
+        "stroke": null,
+        "anchor": null,
+        "category": "product",
+        "status": "completed",
+        "change_type": "policy",
+        "environment": "prod",
+        "severity": null,
+        "planned_start": null,
+        "planned_end": null,
+        "actual_start": "2026-02-15T00:00:00Z",
+        "actual_end": "2026-02-15T00:00:00Z",
+        "time_source": "ts_fallback",
+        "time_confidence": 0.3,
+        "summary": "0.9% commission rate has been restored for ETB (Ethiopian Birr) on the P2P market. This reverses a prior rate change for this currency corridor.",
+        "why_it_matters": "Restores P2P trading costs for the Ethiopia corridor to their previous level.",
+        "links": [],
+        "anchors": [],
+        "impact_area": ["P2P market", "fees"],
+        "impact_type": ["policy_change"],
+        "confidence": 0.92,
+        "importance": 22
+      }
+    ]
+  }
+
+  Message: "We added MUR and DZD currencies to P2P"
+  Response:
+  {
+    "is_event": true,
+    "overflow_note": null,
+    "events": [
+      {
+        "action": "Deploy",
+        "object_name_raw": "MUR and DZD currencies in P2P market",
+        "qualifiers": ["MUR", "DZD"],
+        "stroke": null,
+        "anchor": null,
+        "category": "product",
+        "status": "completed",
+        "change_type": "deploy",
+        "environment": "prod",
+        "severity": null,
+        "planned_start": null,
+        "planned_end": null,
+        "actual_start": "2026-02-15T00:00:00Z",
+        "actual_end": "2026-02-15T00:00:00Z",
+        "time_source": "ts_fallback",
+        "time_confidence": 0.3,
+        "summary": "Mauritian Rupee (MUR) and Algerian Dinar (DZD) have been added as supported currencies on the P2P market. Terse single-line announcement is still a valid completed event.",
+        "why_it_matters": "Expands P2P market availability to traders in Mauritius and Algeria.",
+        "links": [],
+        "anchors": [],
+        "impact_area": ["P2P market", "currency support"],
+        "impact_type": ["ux_change"],
+        "confidence": 0.95,
+        "importance": 28
+      }
+    ]
+  }
+
+  Message: "FYI - с сегодняшнего дня по вопросам FAQ и новым задачам на статьи можно обращаться к Тамине. Сегодня мой посл. день работы в Кошельке."
+  Response:
+  {
+    "is_event": false,
+    "overflow_note": "Farewell message from a departing Wallet team member. Announces internal support ownership handoff for FAQ and article tasks to a colleague. No product change, deployment, or policy update occurred — purely a personnel/org transition note.",
     "events": []
   }
 
