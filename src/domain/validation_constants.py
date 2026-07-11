@@ -23,3 +23,7 @@ IMPORTANCE_LOW: Final[int] = 0
 # Quality thresholds
 MIN_CONFIDENCE_DEFAULT: Final[float] = 0.6
 MIN_IMPORTANCE_DEFAULT: Final[int] = 60
+
+# Cap for time_confidence when a time field was filled from the message
+# timestamp instead of the text (time completion policy).
+TIME_COMPLETION_CONFIDENCE_CAP: Final[float] = 0.3

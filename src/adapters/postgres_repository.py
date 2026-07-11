@@ -28,9 +28,11 @@ from src.domain.exceptions import RepositoryError
 from src.domain.models import (
     CandidateStatus,
     Event,
+    EventAuditEntry,
     EventCandidate,
     LLMCallMetadata,
     MessageSource,
+    ReviewLifecycleStatus,
     SlackMessage,
     TelegramMessage,
 )
@@ -394,6 +396,7 @@ class PostgresRepository:
             is_bot=row["is_bot"],
             subtype=row.get("subtype"),
             reply_count=row["reply_count"],
+            thread_ts=row.get("thread_ts"),
             reactions=row.get("reactions") or {},  # Already parsed dict from JSONB
             links_raw=row.get("links_raw") or [],  # Already parsed list from JSONB
             links_norm=row.get("links_norm") or [],  # Already parsed list from JSONB
@@ -433,6 +436,7 @@ class PostgresRepository:
             else CandidateStatus.NEW,
             features=ScoringFeatures.model_validate(row["features_json"] or {}),
             source_id=source_id,
+            thread_ts=row.get("thread_ts"),
             lease_attempts=int(row.get("lease_attempts") or 0),
             processing_started_at=row.get("processing_started_at"),
         )
@@ -485,6 +489,7 @@ class PostgresRepository:
             or [],  # Already parsed from JSONB
             extracted_at=extracted_at,
             message_published_at=message_published_at,
+            thread_ts=row.get("thread_ts"),
             source_id=MessageSource(source_id_value),
             # Title slots
             action=ActionType(row["action"]),
@@ -544,12 +549,12 @@ class PostgresRepository:
                             message_id, channel_id, "user", user_real_name,
                             user_display_name, user_email, user_profile_image,
                             ts, ts_dt, text_raw, blocks_text, text_norm, is_bot, subtype,
-                            reply_count, reactions, links_raw, links_norm, anchors,
+                            reply_count, thread_ts, reactions, links_raw, links_norm, anchors,
                             attachments_count, files_count, total_reactions,
                             permalink, edited_ts, edited_user
                         ) VALUES (
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                         )
                         ON CONFLICT (message_id) DO UPDATE SET
                             user_real_name = EXCLUDED.user_real_name,
@@ -560,6 +565,7 @@ class PostgresRepository:
                             blocks_text = EXCLUDED.blocks_text,
                             text_norm = EXCLUDED.text_norm,
                             reply_count = EXCLUDED.reply_count,
+                            thread_ts = EXCLUDED.thread_ts,
                             reactions = EXCLUDED.reactions,
                             links_raw = EXCLUDED.links_raw,
                             links_norm = EXCLUDED.links_norm,
@@ -587,6 +593,7 @@ class PostgresRepository:
                             msg.is_bot,
                             msg.subtype,
                             msg.reply_count,
+                            msg.thread_ts,
                             json.dumps(msg.reactions),  # Convert dict to JSON
                             json.dumps(msg.links_raw),  # Convert list to JSON
                             json.dumps(msg.links_norm),  # Convert list to JSON
@@ -780,9 +787,9 @@ class PostgresRepository:
                         INSERT INTO event_candidates (
                             message_id, channel, ts_dt, text_norm, links_norm,
                             anchors, score, status, features_json, source_id,
-                            processing_started_at, lease_attempts
+                            thread_ts, processing_started_at, lease_attempts
                         ) VALUES (
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                         )
                         ON CONFLICT (message_id) DO UPDATE SET
                             text_norm = EXCLUDED.text_norm,
@@ -792,6 +799,7 @@ class PostgresRepository:
                             features_json = EXCLUDED.features_json,
                             status = EXCLUDED.status,
                             source_id = EXCLUDED.source_id,
+                            thread_ts = EXCLUDED.thread_ts,
                             processing_started_at = EXCLUDED.processing_started_at,
                             lease_attempts = EXCLUDED.lease_attempts
                         """,
@@ -806,6 +814,7 @@ class PostgresRepository:
                             cand.status.value,
                             json.dumps(cand.features.model_dump()),
                             cand.source_id.value,
+                            cand.thread_ts,
                             cand.processing_started_at,
                             cand.lease_attempts,
                         ),
@@ -1579,6 +1588,391 @@ class PostgresRepository:
 
         except PsycopgError as exc:
             raise RepositoryError(f"Failed to query candidates: {exc}") from exc
+
+    @staticmethod
+    def _vector_literal(vector: list[float]) -> str:
+        """Serialize a vector to pgvector text format (avoids pgvector pkg)."""
+        return "[" + ",".join(map(str, vector)) + "]"
+
+    def save_event_relation(
+        self,
+        source_event_id: str,
+        relation_type: str,
+        target_event_id: str,
+    ) -> None:
+        """Persist a single event relation (idempotent on duplicates)."""
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO event_relations
+                            (source_event_id, relation_type, target_event_id, created_at)
+                        VALUES (%s, %s, %s, now())
+                        ON CONFLICT DO NOTHING
+                        """,
+                        (source_event_id, relation_type, target_event_id),
+                    )
+                conn.commit()
+        except PsycopgError as exc:
+            raise RepositoryError(f"Failed to save event relation: {exc}") from exc
+
+    def save_event_embeddings(
+        self,
+        rows: list[tuple[str, str, str, list[float]]],
+    ) -> None:
+        """Upsert event embeddings into the pgvector-backed table."""
+        if not rows:
+            return
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.executemany(
+                        """
+                        INSERT INTO event_embeddings
+                            (event_id, model, text_hash, embedding, created_at)
+                        VALUES (%s, %s, %s, %s::vector, now())
+                        ON CONFLICT (event_id) DO UPDATE SET
+                            model = EXCLUDED.model,
+                            text_hash = EXCLUDED.text_hash,
+                            embedding = EXCLUDED.embedding,
+                            created_at = EXCLUDED.created_at
+                        """,
+                        [
+                            (
+                                event_id,
+                                model,
+                                text_hash,
+                                self._vector_literal(vector),
+                            )
+                            for event_id, model, text_hash, vector in rows
+                        ],
+                    )
+                conn.commit()
+        except PsycopgError as exc:
+            raise RepositoryError(f"Failed to save event embeddings: {exc}") from exc
+
+    def get_events_missing_embedding(
+        self,
+        model: str,
+        limit: int = 500,
+    ) -> list[Event]:
+        """Get non-archived events without a stored embedding for the model."""
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(
+                        """
+                        SELECT e.* FROM events e
+                        LEFT JOIN event_embeddings emb
+                            ON emb.event_id = e.event_id AND emb.model = %s
+                        WHERE emb.event_id IS NULL
+                          AND COALESCE(e.review_status, 'needs_review') != 'archived'
+                        ORDER BY e.extracted_at DESC
+                        LIMIT %s
+                        """,
+                        (model, limit),
+                    )
+                    rows = cur.fetchall()
+                    return [self._row_to_event(dict(row)) for row in rows]
+        except PsycopgError as exc:
+            raise RepositoryError(
+                f"Failed to get events missing embedding: {exc}"
+            ) from exc
+
+    def get_event_embeddings(
+        self,
+        event_ids: list[str],
+        model: str,
+    ) -> dict[str, list[float]]:
+        """Load stored embeddings for the given events."""
+        if not event_ids:
+            return {}
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(
+                        """
+                        SELECT event_id, embedding::text AS embedding
+                        FROM event_embeddings
+                        WHERE model = %s AND event_id = ANY(%s)
+                        """,
+                        (model, event_ids),
+                    )
+                    rows = cur.fetchall()
+                    return {
+                        row["event_id"]: json.loads(row["embedding"]) for row in rows
+                    }
+        except PsycopgError as exc:
+            raise RepositoryError(f"Failed to get event embeddings: {exc}") from exc
+
+    def get_events_by_cluster_key(self, cluster_key: str) -> list[Event]:
+        """Get all events in the same cluster (same initiative), oldest first."""
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(
+                        """
+                        SELECT * FROM events
+                        WHERE cluster_key = %s
+                        ORDER BY extracted_at ASC
+                        """,
+                        (cluster_key,),
+                    )
+                    rows = cur.fetchall()
+                    return [self._row_to_event(dict(row)) for row in rows]
+        except PsycopgError as exc:
+            raise RepositoryError(
+                f"Failed to get events by cluster key: {exc}"
+            ) from exc
+
+    def get_events_relating_to(
+        self,
+        event_ids: list[str],
+        relation_type: str,
+    ) -> list[Event]:
+        """Get events that have a relation pointing AT the given events."""
+        if not event_ids:
+            return []
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(
+                        """
+                        SELECT DISTINCT e.* FROM events e
+                        JOIN event_relations r ON r.source_event_id = e.event_id
+                        WHERE r.relation_type = %s AND r.target_event_id = ANY(%s)
+                        ORDER BY e.extracted_at ASC
+                        """,
+                        (relation_type, event_ids),
+                    )
+                    rows = cur.fetchall()
+                    return [self._row_to_event(dict(row)) for row in rows]
+        except PsycopgError as exc:
+            raise RepositoryError(f"Failed to get relating events: {exc}") from exc
+
+    def list_event_clusters(
+        self,
+        *,
+        since: datetime | None = None,
+        object_id: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """List event clusters (stories) with aggregate stats."""
+        try:
+            query = """
+                SELECT cluster_key,
+                       COUNT(*) AS event_count,
+                       MIN(COALESCE(message_published_at, extracted_at)) AS first_seen,
+                       MAX(COALESCE(message_published_at, extracted_at)) AS last_seen,
+                       MAX(importance) AS max_importance
+                FROM events
+                WHERE COALESCE(review_status, 'needs_review') != 'archived'
+            """
+            params: list[Any] = []
+            if object_id is not None:
+                query += " AND object_id = %s"
+                params.append(object_id)
+            query += " GROUP BY cluster_key"
+            if since is not None:
+                query += (
+                    " HAVING MAX(COALESCE(message_published_at, extracted_at)) >= %s"
+                )
+                params.append(since)
+            query += " ORDER BY last_seen DESC LIMIT %s"
+            params.append(limit)
+
+            with self._get_connection() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(query, params)
+                    rows = cur.fetchall()
+                    return [dict(row) for row in rows]
+        except PsycopgError as exc:
+            raise RepositoryError(f"Failed to list event clusters: {exc}") from exc
+
+    def find_similar_events(
+        self,
+        vector: list[float],
+        *,
+        model: str,
+        limit: int = 10,
+        min_similarity: float = 0.0,
+        extracted_after: datetime | None = None,
+        exclude_event_id: str | None = None,
+    ) -> list[tuple[Event, float]]:
+        """Cosine search via pgvector exact scan (no ANN index needed at this scale)."""
+        try:
+            vector_literal = self._vector_literal(vector)
+            query = """
+                SELECT e.*,
+                       1 - (emb.embedding <=> %s::vector) AS _similarity
+                FROM events e
+                JOIN event_embeddings emb ON emb.event_id = e.event_id
+                WHERE emb.model = %s
+                  AND 1 - (emb.embedding <=> %s::vector) >= %s
+            """
+            params: list[Any] = [vector_literal, model, vector_literal, min_similarity]
+            if extracted_after is not None:
+                query += " AND e.extracted_at >= %s"
+                params.append(extracted_after)
+            if exclude_event_id is not None:
+                query += " AND e.event_id != %s"
+                params.append(exclude_event_id)
+            query += " ORDER BY emb.embedding <=> %s::vector ASC LIMIT %s"
+            params.extend([vector_literal, limit])
+
+            with self._get_connection() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(query, params)
+                    rows = cur.fetchall()
+                    return [
+                        (self._row_to_event(dict(row)), float(row["_similarity"]))
+                        for row in rows
+                    ]
+        except PsycopgError as exc:
+            raise RepositoryError(f"Failed to find similar events: {exc}") from exc
+
+    def record_object_suggestion(self, name_raw: str, event_id: str) -> None:
+        """Upsert an unmatched object name into the suggestions queue."""
+        name_normalized = name_raw.lower().strip()
+        if not name_normalized:
+            return
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO object_suggestions
+                            (name_normalized, name_raw_sample, occurrences,
+                             sample_event_ids, status, created_at, updated_at)
+                        VALUES (%s, %s, 1, %s::jsonb, 'pending', NOW(), NOW())
+                        ON CONFLICT (name_normalized) DO UPDATE SET
+                            occurrences = object_suggestions.occurrences + 1,
+                            sample_event_ids = CASE
+                                WHEN jsonb_array_length(
+                                        object_suggestions.sample_event_ids) < 5
+                                     AND NOT object_suggestions.sample_event_ids
+                                         @> to_jsonb(%s::text)
+                                THEN object_suggestions.sample_event_ids
+                                     || to_jsonb(%s::text)
+                                ELSE object_suggestions.sample_event_ids
+                            END,
+                            updated_at = NOW()
+                        """,
+                        (
+                            name_normalized,
+                            name_raw,
+                            json.dumps([event_id]),
+                            event_id,
+                            event_id,
+                        ),
+                    )
+                conn.commit()
+        except PsycopgError as exc:
+            raise RepositoryError(
+                f"Failed to record object suggestion: {exc}"
+            ) from exc
+
+    def list_object_suggestions(self, status: str = "pending") -> list[dict[str, Any]]:
+        """List object suggestions with the given status, most frequent first."""
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(
+                        """
+                        SELECT id, name_normalized, name_raw_sample, occurrences,
+                               sample_event_ids, status, approved_object_id,
+                               created_at, updated_at
+                        FROM object_suggestions
+                        WHERE status = %s
+                        ORDER BY occurrences DESC, updated_at DESC
+                        """,
+                        (status,),
+                    )
+                    return [dict(row) for row in cur.fetchall()]
+        except PsycopgError as exc:
+            raise RepositoryError(
+                f"Failed to list object suggestions: {exc}"
+            ) from exc
+
+    def resolve_object_suggestion(
+        self,
+        suggestion_id: int,
+        status: str,
+        object_id: str | None = None,
+    ) -> bool:
+        """Mark a suggestion approved/rejected. Returns False if not found."""
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE object_suggestions
+                        SET status = %s, approved_object_id = %s, updated_at = NOW()
+                        WHERE id = %s
+                        """,
+                        (status, object_id, suggestion_id),
+                    )
+                    updated = cur.rowcount > 0
+                conn.commit()
+                return updated
+        except PsycopgError as exc:
+            raise RepositoryError(
+                f"Failed to resolve object suggestion: {exc}"
+            ) from exc
+
+    def update_event_review(
+        self,
+        event_id: str,
+        review_status: ReviewLifecycleStatus,
+        reviewed_by: str,
+    ) -> bool:
+        """Update review status of an event."""
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE events
+                        SET review_status = %s, reviewed_by = %s, reviewed_at = NOW()
+                        WHERE event_id = %s
+                        """,
+                        (review_status.value, reviewed_by, event_id),
+                    )
+                    updated = cur.rowcount > 0
+                conn.commit()
+                return updated
+        except PsycopgError as exc:
+            raise RepositoryError(f"Failed to update event review: {exc}") from exc
+
+    def save_audit_entry(self, entry: EventAuditEntry) -> None:
+        """Persist an audit log entry."""
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO event_audit_log
+                            (audit_id, event_id, version, action, origin,
+                             changes, actor, timestamp, note)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (audit_id) DO NOTHING
+                        """,
+                        (
+                            str(entry.audit_id),
+                            str(entry.event_id),
+                            entry.version,
+                            entry.action,
+                            entry.origin.value,
+                            json.dumps(entry.changes),
+                            entry.actor,
+                            entry.timestamp,
+                            entry.note,
+                        ),
+                    )
+                conn.commit()
+        except PsycopgError as exc:
+            raise RepositoryError(f"Failed to save audit entry: {exc}") from exc
 
     def save_telegram_messages(self, messages: list[TelegramMessage]) -> int:
         """Save Telegram messages to storage (idempotent upsert).

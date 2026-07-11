@@ -20,6 +20,7 @@ class TaskType(StrEnum):
     EXTRACTION = "extraction"
     LLM_EXTRACTION = "llm_extraction"
     DEDUP = "dedup"
+    EMBEDDING = "embedding"
     DIGEST = "digest"
 
 

@@ -135,17 +135,72 @@ class SlackClient:
 
         return aggregated
 
-    def _fetch_page_with_retries(
-        self, channel_id: str, params: dict[str, Any]
-    ) -> dict[str, Any]:
-        """Execute conversations.history with retry handling."""
+    def fetch_thread_replies(
+        self,
+        channel_id: str,
+        thread_ts: str,
+        *,
+        page_size: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Fetch all replies of a thread (root message excluded).
 
+        Args:
+            channel_id: Slack channel ID
+            thread_ts: Root message timestamp identifying the thread
+
+        Returns:
+            List of raw reply message dictionaries (each carries thread_ts)
+
+        Raises:
+            SlackAPIError: On API communication errors
+            RateLimitError: On rate limit exceeded
+        """
+        replies: list[dict[str, Any]] = []
+        cursor: str | None = None
+        effective_page_size = page_size or self._page_size
+
+        while True:
+            params: dict[str, Any] = {
+                "channel": channel_id,
+                "ts": thread_ts,
+                "limit": effective_page_size,
+            }
+            if cursor:
+                params["cursor"] = cursor
+
+            response = self._fetch_page_with_retries(
+                channel_id, params, api_method="conversations_replies"
+            )
+
+            if not response.get("ok"):
+                raise SlackAPIError(f"Slack API error: {response.get('error')}")
+
+            messages: list[dict[str, Any]] = response.get("messages", [])
+            replies.extend(msg for msg in messages if msg.get("ts") != thread_ts)
+
+            cursor = response.get("response_metadata", {}).get("next_cursor")  # type: ignore[call-overload]
+            if not cursor:
+                break
+
+            if self._page_delay_seconds > 0:
+                time.sleep(self._page_delay_seconds)
+
+        return replies
+
+    def _fetch_page_with_retries(
+        self,
+        channel_id: str,
+        params: dict[str, Any],
+        *,
+        api_method: str = "conversations_history",
+    ) -> dict[str, Any]:
+        """Execute a paginated Slack fetch method with retry handling."""
+
+        api_call = getattr(self.client, api_method)
         attempt = 0
         while True:
             try:
-                return cast(
-                    "dict[str, Any]", self.client.conversations_history(**params)
-                )
+                return cast("dict[str, Any]", api_call(**params))
             except SlackApiError as error:
                 if error.response.get("error") == "ratelimited":
                     retry_after = int(error.response.headers.get("Retry-After", 10))

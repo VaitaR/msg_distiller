@@ -176,6 +176,27 @@ def _fetch_slack_messages(
         if not next_cursor_value:
             break
 
+    # Fetch thread replies for roots that have them. Known v1 limitation:
+    # replies to roots older than the fetch window (watermark/lookback) are
+    # not picked up, because those roots are never re-fetched.
+    replies: list[dict[str, Any]] = []
+    for root in aggregated:
+        if not root.get("reply_count"):
+            continue
+        root_ts = root.get("ts")
+        if not root_ts:
+            continue
+        try:
+            replies.extend(slack_client.fetch_thread_replies(channel_id, str(root_ts)))
+        except SlackAPIError as exc:
+            logger.warning(
+                "slack_thread_replies_fetch_failed",
+                channel_id=channel_id,
+                thread_ts=root_ts,
+                error=str(exc),
+            )
+    aggregated.extend(replies)
+
     has_more = next_cursor is not None
     return aggregated, next_cursor, has_more
 
@@ -297,8 +318,10 @@ def process_slack_message(
             reactions[emoji] = count
             total_reactions += count
 
-    # Reply count
+    # Thread info: thread_ts is set only for replies (roots normalize to None)
     reply_count = raw_msg.get("reply_count", 0)
+    raw_thread_ts = raw_msg.get("thread_ts")
+    thread_ts = raw_thread_ts if raw_thread_ts and raw_thread_ts != ts else None
 
     # Extract edit information
     edited_info = raw_msg.get("edited")
@@ -335,6 +358,7 @@ def process_slack_message(
         reactions=reactions,
         total_reactions=total_reactions,
         reply_count=reply_count,
+        thread_ts=thread_ts,
         permalink=permalink,
         edited_ts=edited_ts,
         edited_user=edited_user,

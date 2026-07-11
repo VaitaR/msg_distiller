@@ -8,7 +8,10 @@ from datetime import UTC, datetime
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.api.dependencies import get_app_settings
 from src.api.routes_events import router as events_router
+from src.api.routes_registry import router as registry_router
+from src.api.routes_stories import router as stories_router
 from src.api.schemas import HealthResponse
 
 try:
@@ -21,6 +24,8 @@ except ImportError:
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
+    settings = get_app_settings()
+
     app = FastAPI(
         title="Slack Event Manager API",
         description="Events, timeline, review workflow for internal company events",
@@ -33,10 +38,10 @@ def create_app() -> FastAPI:
     # CORS — allow Dash UI and local dev
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=settings.api_allowed_origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+        allow_headers=["Content-Type", "X-Review-Api-Token"],
     )
 
     # Health endpoint
@@ -50,6 +55,8 @@ def create_app() -> FastAPI:
 
     # Mount event routes
     app.include_router(events_router)
+    app.include_router(stories_router)
+    app.include_router(registry_router)
 
     # OpenTelemetry instrumentation (if available)
     if _HAS_OTEL:

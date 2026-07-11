@@ -24,6 +24,7 @@ from src.use_cases.extract_events import (
 from src.use_cases.pipeline_priorities import (
     DEDUP_TASK_PRIORITY,
     DIGEST_TASK_PRIORITY,
+    EMBEDDING_TASK_PRIORITY,
     EXTRACTION_TASK_PRIORITY,
 )
 
@@ -300,11 +301,56 @@ class DedupWorker(_BaseWorker):
 
         payload = task.payload or {}
         enqueue = TaskCreate(
-            task_type=TaskType.DIGEST,
+            task_type=TaskType.EMBEDDING,
             payload={
                 "source": "dedup",
                 "correlation_id": payload.get("correlation_id"),
                 "new_events": result.new_events,
+            },
+            priority=EMBEDDING_TASK_PRIORITY,
+            idempotency_key=f"embedding:{task.task_id}",
+        )
+        self._task_queue.enqueue(enqueue)
+
+
+class EmbeddingWorker(_BaseWorker):
+    """Worker embedding events and running the semantic dedup second pass."""
+
+    def __init__(
+        self,
+        *,
+        task_queue: TaskQueuePort,
+        embed_events: Callable[[], dict[str, int]],
+        semantic_dedup: Callable[[], dict[str, int]],
+        jitter_provider: Callable[[float], float] | None = None,
+    ) -> None:
+        super().__init__(
+            task_queue=task_queue,
+            task_type=TaskType.EMBEDDING,
+            batch_size=1,
+            jitter_provider=jitter_provider,
+        )
+        self._embed_events = embed_events
+        self._semantic_dedup = semantic_dedup
+
+    def _handle_task(self, task: Task) -> None:
+        embed_stats = self._embed_events()
+        dedup_stats = self._semantic_dedup()
+
+        logger.info(
+            "embedding_worker_summary",
+            events_embedded=embed_stats.get("events_embedded", 0),
+            semantic_merged=dedup_stats.get("merged", 0),
+            semantic_suspected=dedup_stats.get("suspected", 0),
+        )
+
+        payload = task.payload or {}
+        enqueue = TaskCreate(
+            task_type=TaskType.DIGEST,
+            payload={
+                "source": "embedding",
+                "correlation_id": payload.get("correlation_id"),
+                "new_events": payload.get("new_events"),
             },
             priority=DIGEST_TASK_PRIORITY,
             idempotency_key=f"digest:{task.task_id}",
@@ -342,6 +388,7 @@ class DigestWorker(_BaseWorker):
 __all__ = [
     "DedupWorker",
     "DigestWorker",
+    "EmbeddingWorker",
     "ExtractionWorker",
     "IngestWorker",
     "LLMExtractionWorker",

@@ -61,7 +61,7 @@ def test_extract_events_fills_missing_completed_time_and_saves_event() -> None:
         time_source="explicit",
         time_confidence=0.9,
         summary="Widget release completed",
-        why_it_matters=None,
+        why_it_matters="Improves user reliability and reduces support load.",
         links=[],
         anchors=[],
         impact_area=[],

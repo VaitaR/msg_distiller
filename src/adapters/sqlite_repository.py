@@ -111,6 +111,7 @@ class SQLiteRepository:
                 reactions TEXT,
                 total_reactions INTEGER DEFAULT 0,
                 reply_count INTEGER DEFAULT 0,
+                thread_ts TEXT,
                 permalink TEXT,
                 edited_ts TEXT,
                 edited_user TEXT,
@@ -118,6 +119,13 @@ class SQLiteRepository:
             )
         """
         )
+
+        # Backfill thread column for existing databases
+        try:
+            cursor.execute("ALTER TABLE raw_slack_messages ADD COLUMN thread_ts TEXT")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
 
         # Raw Telegram messages table
         cursor.execute(
@@ -187,11 +195,18 @@ class SQLiteRepository:
                 status TEXT CHECK(status IN ('new', 'processing', 'llm_ok', 'llm_fail')),
                 features_json TEXT,
                 source_id TEXT DEFAULT 'slack',
+                thread_ts TEXT,
                 processing_started_at TEXT,
                 lease_attempts INTEGER DEFAULT 0
             )
         """
         )
+
+        try:
+            cursor.execute("ALTER TABLE event_candidates ADD COLUMN thread_ts TEXT")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
 
         # Backfill new lease tracking columns for existing databases
         try:
@@ -343,6 +358,51 @@ class SQLiteRepository:
         """
         )
 
+        # Event embeddings table (vector stored as JSON array; cosine in Python)
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS event_embeddings (
+                event_id TEXT PRIMARY KEY,
+                model TEXT NOT NULL,
+                text_hash TEXT NOT NULL,
+                embedding TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (event_id) REFERENCES events(event_id)
+            )
+        """
+        )
+
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_event_embeddings_model
+            ON event_embeddings(model)
+        """
+        )
+
+        # Object registry suggestions (unmatched object names awaiting review)
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS object_suggestions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name_normalized TEXT NOT NULL UNIQUE,
+                name_raw_sample TEXT NOT NULL,
+                occurrences INTEGER NOT NULL DEFAULT 1,
+                sample_event_ids TEXT NOT NULL DEFAULT '[]',
+                status TEXT NOT NULL DEFAULT 'pending',
+                approved_object_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """
+        )
+
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_object_suggestions_status
+            ON object_suggestions(status)
+        """
+        )
+
         # LLM calls table
         cursor.execute(
             """
@@ -386,13 +446,14 @@ class SQLiteRepository:
             """
         )
 
-        # Review lifecycle columns on events (idempotent ALTER)
+        # Review lifecycle + thread columns on events (idempotent ALTER)
         for col, col_def in [
             ("version", "INTEGER DEFAULT 1"),
             ("origin", "TEXT DEFAULT 'ai_extraction'"),
             ("review_status", "TEXT DEFAULT 'needs_review'"),
             ("reviewed_by", "TEXT"),
             ("reviewed_at", "TEXT"),
+            ("thread_ts", "TEXT"),
         ]:
             try:
                 cursor.execute(f"ALTER TABLE events ADD COLUMN {col} {col_def}")
@@ -586,8 +647,8 @@ class SQLiteRepository:
                         user_email, user_profile_image, is_bot, subtype,
                         text, blocks_text, text_norm, links_raw, links_norm,
                         anchors, attachments_count, files_count, reactions, total_reactions,
-                        reply_count, permalink, edited_ts, edited_user, ingested_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        reply_count, thread_ts, permalink, edited_ts, edited_user, ingested_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         msg.message_id,
@@ -612,6 +673,7 @@ class SQLiteRepository:
                         json.dumps(msg.reactions),
                         msg.total_reactions,
                         msg.reply_count,
+                        msg.thread_ts,
                         msg.permalink,
                         msg.edited_ts,
                         msg.edited_user,
@@ -938,8 +1000,8 @@ class SQLiteRepository:
                     INSERT OR REPLACE INTO event_candidates (
                         message_id, channel, ts_dt, text_norm, links_norm,
                         anchors, score, status, features_json, source_id,
-                        processing_started_at, lease_attempts
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        thread_ts, processing_started_at, lease_attempts
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         candidate.message_id,
@@ -952,6 +1014,7 @@ class SQLiteRepository:
                         candidate.status.value,
                         candidate.features.model_dump_json(),
                         candidate.source_id.value,
+                        candidate.thread_ts,
                         candidate.processing_started_at.isoformat()
                         if candidate.processing_started_at
                         else None,
@@ -1716,6 +1779,7 @@ class SQLiteRepository:
             reactions=json.loads(row["reactions"] or "{}"),
             total_reactions=safe_get_int("total_reactions", 0),
             reply_count=row["reply_count"] or 0,
+            thread_ts=safe_get("thread_ts"),
             permalink=safe_get("permalink"),
             edited_ts=safe_get("edited_ts"),
             edited_user=safe_get("edited_user"),
@@ -1746,6 +1810,7 @@ class SQLiteRepository:
             status=CandidateStatus(row["status"]),
             features=ScoringFeatures.model_validate_json(row["features_json"]),
             source_id=source_id,
+            thread_ts=row["thread_ts"] if "thread_ts" in row.keys() else None,
             lease_attempts=int(row["lease_attempts"] or 0)
             if "lease_attempts" in row.keys()
             else 0,
@@ -1801,6 +1866,7 @@ class SQLiteRepository:
             message_published_at=_parse_dt(row["message_published_at"])
             if "message_published_at" in row.keys()
             else None,
+            thread_ts=row["thread_ts"] if "thread_ts" in row.keys() else None,
             # Title slots
             action=ActionType(row["action"]),
             object_id=row["object_id"],
@@ -2249,15 +2315,21 @@ class SQLiteRepository:
             conn = self._get_connection()
             cursor = conn.cursor()
 
+            allowed_columns = {
+                "title": "title",
+                "summary": "summary",
+                "why_it_matters": "why_it_matters",
+            }
+
             # Build SET clause
             set_parts = []
             values: list[Any] = []
             for key, val in updates.items():
-                set_parts.append(f"{key} = ?")
-                if isinstance(val, (list, dict)):
-                    values.append(json.dumps(val))
-                else:
-                    values.append(val)
+                column = allowed_columns.get(key)
+                if column is None:
+                    raise RepositoryError(f"Unsupported event field: {key}")
+                set_parts.append(f"{column} = ?")
+                values.append(val)
 
             # Also bump version and set origin
             set_parts.append("version = version + 1")
@@ -2441,3 +2513,328 @@ class SQLiteRepository:
             return count
         except sqlite3.Error as e:
             raise RepositoryError(f"Failed to delete event relations: {e}")
+
+    def save_event_relation(
+        self,
+        source_event_id: str,
+        relation_type: str,
+        target_event_id: str,
+    ) -> None:
+        """Persist a single event relation (idempotent on duplicates)."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT OR IGNORE INTO event_relations
+                    (source_event_id, relation_type, target_event_id, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    source_event_id,
+                    relation_type,
+                    target_event_id,
+                    datetime.now(tz=pytz.UTC).isoformat(),
+                ),
+            )
+            conn.commit()
+            conn.close()
+        except sqlite3.Error as e:
+            raise RepositoryError(f"Failed to save event relation: {e}")
+
+    def save_event_embeddings(
+        self,
+        rows: list[tuple[str, str, str, list[float]]],
+    ) -> None:
+        """Upsert event embeddings (vector stored as a JSON array)."""
+        if not rows:
+            return
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            now_iso = datetime.now(tz=pytz.UTC).isoformat()
+            cursor.executemany(
+                """
+                INSERT INTO event_embeddings
+                    (event_id, model, text_hash, embedding, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(event_id) DO UPDATE SET
+                    model = excluded.model,
+                    text_hash = excluded.text_hash,
+                    embedding = excluded.embedding,
+                    created_at = excluded.created_at
+                """,
+                [
+                    (event_id, model, text_hash, json.dumps(vector), now_iso)
+                    for event_id, model, text_hash, vector in rows
+                ],
+            )
+            conn.commit()
+            conn.close()
+        except sqlite3.Error as e:
+            raise RepositoryError(f"Failed to save event embeddings: {e}")
+
+    def get_events_missing_embedding(
+        self,
+        model: str,
+        limit: int = 500,
+    ) -> list[Event]:
+        """Get non-archived events without a stored embedding for the model."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT e.* FROM events e
+                LEFT JOIN event_embeddings emb
+                    ON emb.event_id = e.event_id AND emb.model = ?
+                WHERE emb.event_id IS NULL
+                  AND COALESCE(e.review_status, 'needs_review') != 'archived'
+                ORDER BY e.extracted_at DESC
+                LIMIT ?
+                """,
+                (model, limit),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            return [self._row_to_event(row) for row in rows]
+        except sqlite3.Error as e:
+            raise RepositoryError(f"Failed to get events missing embedding: {e}")
+
+    def get_event_embeddings(
+        self,
+        event_ids: list[str],
+        model: str,
+    ) -> dict[str, list[float]]:
+        """Load stored embeddings for the given events."""
+        if not event_ids:
+            return {}
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            placeholders = ",".join("?" for _ in event_ids)
+            cursor.execute(
+                f"""
+                SELECT event_id, embedding FROM event_embeddings
+                WHERE model = ? AND event_id IN ({placeholders})
+                """,
+                (model, *event_ids),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            return {row["event_id"]: json.loads(row["embedding"]) for row in rows}
+        except sqlite3.Error as e:
+            raise RepositoryError(f"Failed to get event embeddings: {e}")
+
+    def get_events_relating_to(
+        self,
+        event_ids: list[str],
+        relation_type: str,
+    ) -> list[Event]:
+        """Get events that have a relation pointing AT the given events."""
+        if not event_ids:
+            return []
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            placeholders = ",".join("?" for _ in event_ids)
+            cursor.execute(
+                f"""
+                SELECT DISTINCT e.* FROM events e
+                JOIN event_relations r ON r.source_event_id = e.event_id
+                WHERE r.relation_type = ? AND r.target_event_id IN ({placeholders})
+                ORDER BY e.extracted_at ASC
+                """,
+                (relation_type, *event_ids),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            return [self._row_to_event(row) for row in rows]
+        except sqlite3.Error as e:
+            raise RepositoryError(f"Failed to get relating events: {e}")
+
+    def list_event_clusters(
+        self,
+        *,
+        since: datetime | None = None,
+        object_id: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """List event clusters (stories) with aggregate stats."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            query = """
+                SELECT cluster_key,
+                       COUNT(*) AS event_count,
+                       MIN(COALESCE(message_published_at, extracted_at)) AS first_seen,
+                       MAX(COALESCE(message_published_at, extracted_at)) AS last_seen,
+                       MAX(importance) AS max_importance
+                FROM events
+                WHERE COALESCE(review_status, 'needs_review') != 'archived'
+            """
+            params: list[Any] = []
+            if object_id is not None:
+                query += " AND object_id = ?"
+                params.append(object_id)
+            query += " GROUP BY cluster_key"
+            if since is not None:
+                query += " HAVING MAX(COALESCE(message_published_at, extracted_at)) >= ?"
+                params.append(since.isoformat())
+            query += " ORDER BY last_seen DESC LIMIT ?"
+            params.append(limit)
+
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            conn.close()
+            return [dict(row) for row in rows]
+        except sqlite3.Error as e:
+            raise RepositoryError(f"Failed to list event clusters: {e}")
+
+    def find_similar_events(
+        self,
+        vector: list[float],
+        *,
+        model: str,
+        limit: int = 10,
+        min_similarity: float = 0.0,
+        extracted_after: datetime | None = None,
+        exclude_event_id: str | None = None,
+    ) -> list[tuple[Event, float]]:
+        """Cosine search over stored embeddings (computed in Python)."""
+        from src.services.vector_math import cosine_similarity
+
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            query = """
+                SELECT e.*, emb.embedding AS _embedding FROM events e
+                JOIN event_embeddings emb ON emb.event_id = e.event_id
+                WHERE emb.model = ?
+            """
+            params: list[Any] = [model]
+            if extracted_after is not None:
+                query += " AND e.extracted_at >= ?"
+                params.append(extracted_after.isoformat())
+            if exclude_event_id is not None:
+                query += " AND e.event_id != ?"
+                params.append(exclude_event_id)
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            conn.close()
+
+            scored: list[tuple[Event, float]] = []
+            for row in rows:
+                candidate_vector = json.loads(row["_embedding"])
+                similarity = cosine_similarity(vector, candidate_vector)
+                if similarity >= min_similarity:
+                    scored.append((self._row_to_event(row), similarity))
+
+            scored.sort(key=lambda pair: pair[1], reverse=True)
+            return scored[:limit]
+        except sqlite3.Error as e:
+            raise RepositoryError(f"Failed to find similar events: {e}")
+
+    def record_object_suggestion(self, name_raw: str, event_id: str) -> None:
+        """Upsert an unmatched object name into the suggestions queue."""
+        name_normalized = name_raw.lower().strip()
+        if not name_normalized:
+            return
+        now = datetime.now(tz=UTC).isoformat()
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, occurrences, sample_event_ids FROM object_suggestions"
+                " WHERE name_normalized = ?",
+                (name_normalized,),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                cursor.execute(
+                    """
+                    INSERT INTO object_suggestions
+                        (name_normalized, name_raw_sample, occurrences,
+                         sample_event_ids, status, created_at, updated_at)
+                    VALUES (?, ?, 1, ?, 'pending', ?, ?)
+                    """,
+                    (name_normalized, name_raw, json.dumps([event_id]), now, now),
+                )
+            else:
+                sample_ids = json.loads(row["sample_event_ids"])
+                if event_id not in sample_ids and len(sample_ids) < 5:
+                    sample_ids.append(event_id)
+                cursor.execute(
+                    """
+                    UPDATE object_suggestions
+                    SET occurrences = ?, sample_event_ids = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        row["occurrences"] + 1,
+                        json.dumps(sample_ids),
+                        now,
+                        row["id"],
+                    ),
+                )
+            conn.commit()
+            conn.close()
+        except sqlite3.Error as e:
+            raise RepositoryError(f"Failed to record object suggestion: {e}")
+
+    def list_object_suggestions(self, status: str = "pending") -> list[dict[str, Any]]:
+        """List object suggestions with the given status, most frequent first."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, name_normalized, name_raw_sample, occurrences,
+                       sample_event_ids, status, approved_object_id,
+                       created_at, updated_at
+                FROM object_suggestions
+                WHERE status = ?
+                ORDER BY occurrences DESC, updated_at DESC
+                """,
+                (status,),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            result = []
+            for row in rows:
+                item = dict(row)
+                item["sample_event_ids"] = json.loads(item["sample_event_ids"])
+                result.append(item)
+            return result
+        except sqlite3.Error as e:
+            raise RepositoryError(f"Failed to list object suggestions: {e}")
+
+    def resolve_object_suggestion(
+        self,
+        suggestion_id: int,
+        status: str,
+        object_id: str | None = None,
+    ) -> bool:
+        """Mark a suggestion approved/rejected. Returns False if not found."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE object_suggestions
+                SET status = ?, approved_object_id = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    status,
+                    object_id,
+                    datetime.now(tz=UTC).isoformat(),
+                    suggestion_id,
+                ),
+            )
+            updated = cursor.rowcount > 0
+            conn.commit()
+            conn.close()
+            return updated
+        except sqlite3.Error as e:
+            raise RepositoryError(f"Failed to resolve object suggestion: {e}")

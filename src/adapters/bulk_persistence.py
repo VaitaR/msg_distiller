@@ -90,6 +90,7 @@ class EventDTO:
             _serialize_datetime(event.reviewed_at),
             event.version,
             event.origin.value,
+            event.thread_ts,
         )
         return cls(backend=backend, connection=connection, values=values)
 
@@ -203,7 +204,7 @@ def _postgres_events_batch(
             time_source, time_confidence,
             summary, why_it_matters, links, anchors, impact_area, impact_type,
             confidence, importance, cluster_key, dedup_key,
-            review_status, reviewed_by, reviewed_at, version, origin
+            review_status, reviewed_by, reviewed_at, version, origin, thread_ts
         ) VALUES (
             %s, %s, %s, %s, %s, %s,
             %s, %s, %s, %s, %s, %s,
@@ -212,7 +213,7 @@ def _postgres_events_batch(
             %s, %s,
             %s, %s, %s, %s, %s, %s,
             %s, %s, %s, %s,
-            %s, %s, %s, %s, %s
+            %s, %s, %s, %s, %s, %s
         )
         ON CONFLICT (dedup_key) DO UPDATE SET
             message_id = EXCLUDED.message_id,
@@ -250,7 +251,8 @@ def _postgres_events_batch(
             reviewed_by = EXCLUDED.reviewed_by,
             reviewed_at = EXCLUDED.reviewed_at,
             version = EXCLUDED.version,
-            origin = EXCLUDED.origin
+            origin = EXCLUDED.origin,
+            thread_ts = EXCLUDED.thread_ts
     """
 
     try:
@@ -279,7 +281,7 @@ def _sqlite_events_batch(
             time_source, time_confidence,
             summary, why_it_matters, links, anchors, impact_area, impact_type,
             confidence, importance, cluster_key, dedup_key,
-            review_status, reviewed_by, reviewed_at, version, origin
+            review_status, reviewed_by, reviewed_at, version, origin, thread_ts
         ) VALUES (
             ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
@@ -288,7 +290,7 @@ def _sqlite_events_batch(
             ?, ?,
             ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?,
-            ?, ?, ?, ?, ?
+            ?, ?, ?, ?, ?, ?
         )
     """
 

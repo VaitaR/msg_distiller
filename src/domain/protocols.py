@@ -673,6 +673,181 @@ class RepositoryProtocol(Protocol):
         """
         ...
 
+    def save_event_relation(
+        self,
+        source_event_id: str,
+        relation_type: str,
+        target_event_id: str,
+    ) -> None:
+        """Persist a single event relation (idempotent on duplicates).
+
+        Args:
+            source_event_id: Source event UUID string
+            relation_type: RelationType value
+            target_event_id: Target event UUID string
+        """
+        ...
+
+    def save_event_embeddings(
+        self,
+        rows: list[tuple[str, str, str, list[float]]],
+    ) -> None:
+        """Upsert event embeddings.
+
+        Args:
+            rows: Tuples of (event_id, model, text_hash, vector)
+        """
+        ...
+
+    def get_events_missing_embedding(
+        self,
+        model: str,
+        limit: int = 500,
+    ) -> list[Event]:
+        """Get events that have no embedding row for the given model.
+
+        Args:
+            model: Embedding model name
+            limit: Max events to return
+
+        Returns:
+            Events without a stored embedding (any review status except archived)
+        """
+        ...
+
+    def get_event_embeddings(
+        self,
+        event_ids: list[str],
+        model: str,
+    ) -> dict[str, list[float]]:
+        """Load stored embeddings for the given events.
+
+        Args:
+            event_ids: Event UUID strings
+            model: Embedding model name
+
+        Returns:
+            Mapping event_id -> vector (missing events omitted)
+        """
+        ...
+
+    def find_similar_events(
+        self,
+        vector: list[float],
+        *,
+        model: str,
+        limit: int = 10,
+        min_similarity: float = 0.0,
+        extracted_after: datetime | None = None,
+        exclude_event_id: str | None = None,
+    ) -> list[tuple[Event, float]]:
+        """Find events whose embeddings are most similar to the given vector.
+
+        Args:
+            vector: Query embedding
+            model: Embedding model name (only compare same-model vectors)
+            limit: Max results
+            min_similarity: Minimum cosine similarity (0..1)
+            extracted_after: Optional filter on Event.extracted_at
+            exclude_event_id: Optional event to exclude (self-match)
+
+        Returns:
+            (Event, cosine_similarity) tuples ordered by similarity DESC
+        """
+        ...
+
+    def get_events_by_cluster_key(self, cluster_key: str) -> list[Event]:
+        """Get all events in the same cluster (same initiative), oldest first.
+
+        Args:
+            cluster_key: Cluster key
+
+        Returns:
+            List of events ordered by extracted_at ASC
+        """
+        ...
+
+    def list_event_clusters(
+        self,
+        *,
+        since: datetime | None = None,
+        object_id: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """List event clusters (stories) with aggregate stats.
+
+        Args:
+            since: Only clusters with activity at/after this time
+            object_id: Optional canonical object filter
+            limit: Max clusters, ordered by last activity DESC
+
+        Returns:
+            Dicts with keys: cluster_key, event_count, first_seen, last_seen,
+            max_importance
+        """
+        ...
+
+    def get_events_relating_to(
+        self,
+        event_ids: list[str],
+        relation_type: str,
+    ) -> list[Event]:
+        """Get events that have a relation pointing AT the given events.
+
+        Args:
+            event_ids: Target event UUID strings
+            relation_type: RelationType value (e.g. 'updates')
+
+        Returns:
+            Source events of matching relations (deduplicated)
+        """
+        ...
+
+    def record_object_suggestion(self, name_raw: str, event_id: str) -> None:
+        """Record an unmatched object name as a registry suggestion (upsert).
+
+        Increments occurrences for repeats (matched on the normalized name)
+        and keeps up to 5 sample event IDs.
+
+        Args:
+            name_raw: Raw object name that failed canonicalization
+            event_id: Event where the name was seen
+        """
+        ...
+
+    def list_object_suggestions(
+        self, status: str = "pending"
+    ) -> list[dict[str, Any]]:
+        """List object registry suggestions with the given status.
+
+        Args:
+            status: 'pending', 'approved' or 'rejected'
+
+        Returns:
+            Suggestion dicts ordered by occurrences DESC. Keys: id,
+            name_normalized, name_raw_sample, occurrences, sample_event_ids,
+            status, approved_object_id, created_at, updated_at
+        """
+        ...
+
+    def resolve_object_suggestion(
+        self,
+        suggestion_id: int,
+        status: str,
+        object_id: str | None = None,
+    ) -> bool:
+        """Mark a suggestion approved/rejected.
+
+        Args:
+            suggestion_id: Suggestion primary key
+            status: 'approved' or 'rejected'
+            object_id: Canonical object the synonym was attached to (approve)
+
+        Returns:
+            True if a row was updated
+        """
+        ...
+
     """Protocol for LLM API interactions."""
 
     def extract_events(

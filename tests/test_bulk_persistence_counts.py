@@ -113,6 +113,7 @@ def _create_event_values(index: int) -> tuple[object, ...]:
         None,
         1,
         "ai_extraction",
+        None,  # thread_ts
     )
 
 
@@ -173,7 +174,8 @@ def test_bulk_upsert_statement_counts(record_count: int) -> None:
             reviewed_by TEXT,
             reviewed_at TEXT,
             version INTEGER DEFAULT 1,
-            origin TEXT DEFAULT 'ai_extraction'
+            origin TEXT DEFAULT 'ai_extraction',
+            thread_ts TEXT
         )
         """
     )

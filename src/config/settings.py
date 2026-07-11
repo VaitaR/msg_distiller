@@ -41,6 +41,14 @@ LLM_CACHE_TTL_DAYS_DEFAULT: Final[int] = 21
 
 TELEGRAM_FETCH_PAGE_SIZE_DEFAULT: Final[int] = 200
 TELEGRAM_RATE_LIMIT_DELAY_SECONDS_DEFAULT: Final[float] = 1.0
+DEFAULT_API_ALLOWED_ORIGINS: Final[list[str]] = [
+    "http://127.0.0.1:5173",
+    "http://localhost:5173",
+    "http://127.0.0.1:4173",
+    "http://localhost:4173",
+    "http://127.0.0.1:4174",
+    "http://localhost:4174",
+]
 
 logger = cast("Any", get_logger(__name__))
 
@@ -237,6 +245,10 @@ class Settings(BaseSettings):
     telegram_api_hash: SecretStr | None = Field(
         default=None, description="Telegram API hash (from .env)"
     )
+    review_api_token: SecretStr | None = Field(
+        default=None,
+        description="Shared token required for mutating review API routes (from .env)",
+    )
 
     # === NON-SENSITIVE CONFIG (from config.yaml or defaults) ===
 
@@ -287,6 +299,19 @@ class Settings(BaseSettings):
         _assign("llm_max_events_per_msg", llm_config.get("max_events_per_msg"))
         _assign("llm_cache_ttl_days", llm_config.get("cache_ttl_days"))
 
+        embeddings_config = config.get("embeddings") or {}
+        _assign("embeddings_enabled", embeddings_config.get("enabled"))
+        _assign("embedding_model", embeddings_config.get("model"))
+        _assign("embedding_batch_size", embeddings_config.get("batch_size"))
+        _assign(
+            "semantic_auto_merge_threshold",
+            embeddings_config.get("auto_merge_threshold"),
+        )
+        _assign(
+            "semantic_suspect_threshold",
+            embeddings_config.get("suspect_threshold"),
+        )
+
         database_config = config.get("database") or {}
         _assign("database_type", database_config.get("type"))
         _assign("db_path", database_config.get("path"))
@@ -319,6 +344,10 @@ class Settings(BaseSettings):
 
         logging_config = config.get("logging") or {}
         _assign("log_level", logging_config.get("level"))
+
+        api_config = config.get("api") or {}
+        _assign("api_bind_host", api_config.get("bind_host"))
+        _assign("api_allowed_origins", api_config.get("allowed_origins"))
 
         channels_config = config.get("channels")
         if isinstance(channels_config, list):
@@ -513,6 +542,34 @@ class Settings(BaseSettings):
     )
     llm_timeout_seconds: int = Field(default=120, description="LLM request timeout")
 
+    # Embeddings configuration
+    embeddings_enabled: bool = Field(
+        default=True,
+        description="Enable event embeddings, semantic search and semantic dedup",
+    )
+    embedding_model: str = Field(
+        default="text-embedding-3-small",
+        description="OpenAI embedding model for event vectors",
+    )
+    embedding_batch_size: int = Field(
+        default=100,
+        ge=1,
+        le=2048,
+        description="Texts per embeddings API call",
+    )
+    semantic_auto_merge_threshold: float = Field(
+        default=0.92,
+        ge=0.0,
+        le=1.0,
+        description="Cosine similarity for automatic cross-source merge",
+    )
+    semantic_suspect_threshold: float = Field(
+        default=0.80,
+        ge=0.0,
+        le=1.0,
+        description="Cosine similarity for flagging duplicate suspects",
+    )
+
     # Database configuration
     database_type: Literal["sqlite", "postgres"] = Field(
         default="sqlite", description="Database type: sqlite or postgres"
@@ -664,6 +721,16 @@ class Settings(BaseSettings):
 
     # Observability
     log_level: str = Field(default="INFO", description="Logging level")
+
+    # API runtime configuration
+    api_bind_host: str = Field(
+        default="127.0.0.1",
+        description="Default bind host for the FastAPI server",
+    )
+    api_allowed_origins: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_API_ALLOWED_ORIGINS),
+        description="Explicit browser origins allowed to access the API",
+    )
 
     # Configuration paths
     object_registry_path: str = Field(

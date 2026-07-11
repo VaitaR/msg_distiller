@@ -19,6 +19,7 @@ from src.use_cases.extract_events import (
 from src.workers.pipeline import (
     DedupWorker,
     DigestWorker,
+    EmbeddingWorker,
     ExtractionWorker,
     IngestWorker,
     LLMExtractionWorker,
@@ -197,7 +198,7 @@ def test_llm_worker_skips_dedup_when_not_needed(mocker: MockerFixture) -> None:
     queue.complete.assert_called_once_with(task.task_id)
 
 
-def test_dedup_worker_enqueues_digest(mocker: MockerFixture) -> None:
+def test_dedup_worker_enqueues_embedding(mocker: MockerFixture) -> None:
     queue = mocker.Mock()
     task = _task(TaskType.DEDUP, payload={"correlation_id": "corr"})
     queue.lease.return_value = [task]
@@ -214,6 +215,36 @@ def test_dedup_worker_enqueues_digest(mocker: MockerFixture) -> None:
     worker.process_available_tasks()
 
     dedupe_callable.assert_called_once()
+    queue.enqueue.assert_called_once()
+    enqueued = queue.enqueue.call_args.args[0]
+    assert enqueued.task_type is TaskType.EMBEDDING
+    assert enqueued.payload["correlation_id"] == "corr"
+    queue.complete.assert_called_once_with(task.task_id)
+
+
+def test_embedding_worker_runs_stages_and_enqueues_digest(
+    mocker: MockerFixture,
+) -> None:
+    queue = mocker.Mock()
+    task = _task(TaskType.EMBEDDING, payload={"correlation_id": "corr"})
+    queue.lease.return_value = [task]
+
+    embed_callable = mocker.Mock(return_value={"events_embedded": 3, "batches": 1})
+    semantic_callable = mocker.Mock(
+        return_value={"candidates": 3, "merged": 1, "suspected": 1}
+    )
+
+    worker = EmbeddingWorker(
+        task_queue=queue,
+        embed_events=embed_callable,
+        semantic_dedup=semantic_callable,
+        jitter_provider=lambda base: 0.0,
+    )
+
+    worker.process_available_tasks()
+
+    embed_callable.assert_called_once()
+    semantic_callable.assert_called_once()
     queue.enqueue.assert_called_once()
     enqueued = queue.enqueue.call_args.args[0]
     assert enqueued.task_type is TaskType.DIGEST

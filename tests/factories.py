@@ -19,10 +19,12 @@ from src.domain.models import (
     ChangeType,
     Environment,
     Event,
+    EventRelation,
     EventCategory,
     EventOrigin,
     EventStatus,
     MessageSource,
+    RelationType,
     ReviewLifecycleStatus,
     Severity,
     TimeSource,
@@ -259,6 +261,12 @@ SEED_EVENTS: list[Event] = [
         review_status=ReviewLifecycleStatus.APPROVED,
         reviewed_by="reviewer-1",
         reviewed_at=_dt(12),
+        relations=[
+            EventRelation(
+                relation_type=RelationType.ABSORBED_FROM,
+                target_event_id=_uuid(9),
+            )
+        ],
         origin=EventOrigin.HUMAN_REVIEW,
         version=2,
     ),

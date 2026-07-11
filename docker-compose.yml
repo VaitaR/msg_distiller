@@ -35,7 +35,7 @@ x-worker-base: &worker-base
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16  # pgvector needed for event_embeddings
     container_name: slack_postgres
     environment:
       POSTGRES_DB: ${POSTGRES_DATABASE:-slack_events}
@@ -95,6 +95,13 @@ services:
     <<: *worker-base
     container_name: slack_dedup_worker
     command: python scripts/run_dedup_worker.py
+    networks:
+      - slack_network
+
+  embedding-worker:
+    <<: *worker-base
+    container_name: slack_embedding_worker
+    command: python scripts/run_embedding_worker.py
     networks:
       - slack_network
 

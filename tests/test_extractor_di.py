@@ -82,7 +82,7 @@ def test_extract_events_use_case_uses_injected_dependencies(
         actual_end=None,
         time_source="explicit",
         time_confidence=0.8,
-        summary="Summary",
+        summary="Test Object launched in production and improved reliability for users.",
         why_it_matters="Why it matters",
         links=["https://example.com"],
         anchors=["anchor"],
@@ -110,11 +110,12 @@ def test_extract_events_use_case_uses_injected_dependencies(
             message_id="msg-1",
             channel="#general",
             ts_dt=datetime.now(UTC),
-            text_norm="Test message",
+            text_norm="Test Object launched and is now live in production.",
             links_norm=["https://example.com"],
             anchors=["anchor"],
             features=SimpleNamespace(reaction_count=2, has_mention=False),
             source_id=MessageSource.SLACK,
+            thread_ts=None,
         )
     ]
     repository.get_daily_llm_cost.return_value = 0.0

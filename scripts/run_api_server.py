@@ -16,11 +16,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import uvicorn  # noqa: E402
 
 from src.api.app import create_app  # noqa: E402
+from src.config.settings import get_settings  # noqa: E402
 
 
 def main() -> None:
+    settings = get_settings()
+
     parser = argparse.ArgumentParser(description="Event Manager API Server")
-    parser.add_argument("--host", default="0.0.0.0", help="Bind host")
+    parser.add_argument(
+        "--host",
+        default=None,
+        help="Bind host (defaults to API_BIND_HOST or 127.0.0.1)",
+    )
     parser.add_argument("--port", type=int, default=8000, help="Bind port")
     parser.add_argument(
         "--reload", action="store_true", help="Auto-reload on code changes"
@@ -30,7 +37,7 @@ def main() -> None:
     app = create_app()
     uvicorn.run(
         app,
-        host=args.host,
+        host=args.host or settings.api_bind_host,
         port=args.port,
         log_level="info",
     )

@@ -28,6 +28,7 @@ class ObjectRegistry:
         self.registry_path = Path(registry_path)
         self.objects: dict[str, list[str]] = {}
         self._reverse_index: dict[str, str] = {}
+        self._loaded_mtime: float | None = None
 
         self._load_registry()
         self._build_reverse_index()
@@ -36,8 +37,10 @@ class ObjectRegistry:
         """Load registry from YAML file."""
         if not self.registry_path.exists():
             self.objects = {}
+            self._loaded_mtime = None
             return
 
+        self._loaded_mtime = self.registry_path.stat().st_mtime
         with open(self.registry_path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
@@ -49,6 +52,23 @@ class ObjectRegistry:
             raise ValueError("Registry must have 'objects' key")
 
         self.objects = data["objects"]
+
+    def _reload_if_changed(self) -> None:
+        """Hot-reload the registry when the YAML file changed on disk."""
+        try:
+            current_mtime = (
+                self.registry_path.stat().st_mtime
+                if self.registry_path.exists()
+                else None
+            )
+        except OSError:
+            return
+
+        if current_mtime == self._loaded_mtime:
+            return
+
+        self._load_registry()
+        self._build_reverse_index()
 
     def _build_reverse_index(self) -> None:
         """Build reverse index: synonym -> object_id."""
@@ -83,6 +103,8 @@ class ObjectRegistry:
         """
         if not raw_name:
             return None
+
+        self._reload_if_changed()
 
         normalized = raw_name.lower().strip()
 
@@ -124,3 +146,81 @@ class ObjectRegistry:
             List of canonical object IDs
         """
         return list(self.objects.keys())
+
+    def add_synonym(self, object_id: str, synonym: str) -> None:
+        """Append a synonym to the registry YAML file (comment-preserving).
+
+        Inserts the synonym line after the last synonym of the object's block
+        (or appends a new block for a new object_id) via targeted text edits,
+        so YAML comments survive. The result is validated with yaml.safe_load;
+        on invalid output the file is rolled back.
+
+        Args:
+            object_id: Canonical object ID (existing or new)
+            synonym: Synonym to register
+
+        Raises:
+            ValueError: If arguments are empty or the edited YAML is invalid
+        """
+        object_id = object_id.strip()
+        synonym = synonym.strip()
+        if not object_id or not synonym:
+            raise ValueError("object_id and synonym must be non-empty")
+
+        self._reload_if_changed()
+        if synonym.lower() in (
+            s.lower() for s in self.objects.get(object_id, [])
+        ):
+            return  # Already registered
+
+        original = (
+            self.registry_path.read_text(encoding="utf-8")
+            if self.registry_path.exists()
+            else "objects:\n"
+        )
+
+        quoted = synonym.replace("\\", "\\\\").replace('"', '\\"')
+        lines = original.splitlines()
+
+        block_start = None
+        for i, line in enumerate(lines):
+            if line.strip() == f"{object_id}:" and line.startswith("  "):
+                block_start = i
+                break
+
+        if block_start is None:
+            # New object: append a block at the end of the file
+            new_lines = [*lines, f"  {object_id}:", f'    - "{quoted}"']
+        else:
+            # Existing object: insert after the last synonym of the block
+            insert_at = block_start + 1
+            for j in range(block_start + 1, len(lines)):
+                stripped = lines[j].strip()
+                if stripped.startswith("-"):
+                    insert_at = j + 1
+                elif stripped and not stripped.startswith("#"):
+                    break
+            new_lines = [
+                *lines[:insert_at],
+                f'    - "{quoted}"',
+                *lines[insert_at:],
+            ]
+
+        updated = "\n".join(new_lines) + "\n"
+
+        # Validate before considering the write final; roll back otherwise
+        self.registry_path.write_text(updated, encoding="utf-8")
+        try:
+            data = yaml.safe_load(updated)
+            if (
+                not isinstance(data, dict)
+                or "objects" not in data
+                or synonym not in (data["objects"].get(object_id) or [])
+            ):
+                raise ValueError("edited registry did not contain the new synonym")
+        except (yaml.YAMLError, ValueError) as exc:
+            self.registry_path.write_text(original, encoding="utf-8")
+            raise ValueError(f"Failed to add synonym to registry: {exc}") from exc
+
+        self._load_registry()
+        self._build_reverse_index()

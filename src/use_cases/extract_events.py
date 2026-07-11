@@ -5,6 +5,7 @@ Uses LLM to extract structured events from candidate messages.
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -17,6 +18,10 @@ from src.adapters.llm_client import LLMClient
 from src.adapters.query_builders import CandidateQueryCriteria
 from src.config.logging_config import get_logger
 from src.config.settings import LLM_CACHE_TTL_DAYS_DEFAULT, Settings
+from src.domain.candidate_constants import (
+    HARD_MAX_EVENTS_PER_MESSAGE,
+    LLM_MAX_EVENTS_PER_MSG_FALLBACK,
+)
 from src.domain.exceptions import BudgetExceededError, LLMAPIError, ValidationError
 from src.domain.models import (
     ActionType,
@@ -31,6 +36,7 @@ from src.domain.models import (
     LLMEvent,
     LLMResponse,
     MessageSource,
+    RelationType,
     Severity,
     TimeSource,
 )
@@ -45,6 +51,19 @@ from src.observability.metrics import PIPELINE_STAGE_DURATION_SECONDS
 from src.observability.tracing import correlation_scope
 from src.ports.task_queue import TaskQueuePort
 from src.services import deduplicator, token_budget
+from src.services.extraction_policy import (
+    action_implies_change,
+    has_release_fact_evidence,
+    is_future_like_without_evidence,
+    is_low_coverage_summary,
+    is_low_utility_summary,
+    is_non_event_message,
+    is_t_product_rescue_candidate,
+    normalize_action,
+    summary_contract_components,
+    summary_has_change,
+    summary_meets_contract,
+)
 from src.services.importance_scorer import ImportanceScorer
 from src.services.llm_client_pool import LLMClientPool
 from src.services.object_registry import ObjectRegistry
@@ -196,6 +215,31 @@ def _build_prompt_metadata(
     return metadata
 
 
+def _build_t_product_rescue_text(text: str) -> str:
+    """Build a focused rescue prompt payload for noisy t-product messages."""
+
+    raw = text or ""
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    if not lines:
+        return raw
+
+    signal_pattern = re.compile(
+        r"(delist|disable|removed?|rollback|zero\s*fee|делист|отключ|убра|обнул|запущ|включ|в\s+проде|в\s+продакшене)",
+        re.IGNORECASE,
+    )
+    focused = [line for line in lines if signal_pattern.search(line)]
+
+    if not focused:
+        return raw
+
+    focused_text = "\n".join(focused[:10])
+    return (
+        "Context: message from t-product channel. "
+        "Focus on concrete implemented policy/decision changes only.\n\n"
+        f"{focused_text}"
+    )
+
+
 @dataclass(slots=True)
 class CandidateExtractionMetrics:
     """Metrics produced while processing a single candidate."""
@@ -207,6 +251,18 @@ class CandidateExtractionMetrics:
     errors: list[str] = field(default_factory=list)
     budget_exhausted: bool = False
     dedup_required: bool = False
+    event_message_count: int = 0
+    multi_event_message_count: int = 0
+    future_like_events: int = 0
+    other_action_events: int = 0
+    low_utility_summaries: int = 0
+    low_coverage_summaries: int = 0
+    summary_contract_reject_missing_change: int = 0
+    summary_contract_reject_missing_scope: int = 0
+    summary_contract_soft_accept_missing_effect: int = 0
+    summary_contract_change_recovered_from_action: int = 0
+    t_product_rescue_attempts: int = 0
+    t_product_rescue_recovered: int = 0
 
 
 @dataclass(slots=True)
@@ -283,10 +339,7 @@ def convert_llm_event_to_domain(
     object_id = object_registry.canonicalize_object(llm_event.object_name_raw)
 
     # Parse enums
-    try:
-        action = ActionType(llm_event.action)
-    except ValueError:
-        action = ActionType.OTHER
+    action = normalize_action(llm_event.action)
 
     try:
         status = EventStatus(llm_event.status)
@@ -365,23 +418,32 @@ def convert_llm_event_to_domain(
     return event
 
 
-def _process_candidate_with_llm(
+@dataclass(slots=True)
+class _CandidateContext:
+    """Prepared inputs for LLM extraction of a single candidate."""
+
+    source_id: MessageSource
+    channel_name: str
+    rescue_enabled: bool
+    llm_client: LLMClient
+    limited_links: list[str]
+    metadata: dict[str, Any] | None
+    text_chunks: list[str]
+
+
+def _prepare_candidate_for_extraction(
     *,
     candidate: EventCandidate,
     llm_client: LLMClient,
     llm_client_pool: LLMClientPool | None,
     repository: RepositoryProtocol,
     settings: Settings,
-    cache_ttl: timedelta | None,
-    object_registry: ObjectRegistry,
-    importance_scorer: ImportanceScorer,
-    validator: EventValidator,
     correlation_id: str | None,
     position: int | None,
     total_candidates: int | None,
-    enforce_budget: bool,
-) -> CandidateExtractionMetrics:
-    metrics = CandidateExtractionMetrics()
+) -> _CandidateContext:
+    """Resolve channel config, effective LLM client, prompt metadata and chunks."""
+
     candidate_source = getattr(candidate, "source_id", MessageSource.SLACK)
     if not isinstance(candidate_source, MessageSource):
         candidate_source = MessageSource.SLACK
@@ -392,6 +454,7 @@ def _process_candidate_with_llm(
     channel_name = feature_channel_name or (
         channel_config.channel_name if channel_config else candidate.channel
     )
+    rescue_enabled = bool(getattr(channel_config, "rescue_enabled", False))
 
     effective_llm_client = llm_client
     prompt_file_override: str | None = None
@@ -447,253 +510,593 @@ def _process_candidate_with_llm(
             channel=channel_name,
         )
 
+    return _CandidateContext(
+        source_id=candidate_source,
+        channel_name=channel_name,
+        rescue_enabled=rescue_enabled,
+        llm_client=effective_llm_client,
+        limited_links=limited_links,
+        metadata=metadata,
+        text_chunks=text_chunks,
+    )
+
+
+def _process_candidate_chunks(
+    *,
+    candidate: EventCandidate,
+    ctx: _CandidateContext,
+    repository: RepositoryProtocol,
+    settings: Settings,
+    cache_ttl: timedelta | None,
+    enforce_budget: bool,
+    metrics: CandidateExtractionMetrics,
+    correlation_id: str | None,
+) -> tuple[list[LLMEvent], bool]:
+    """Run cache lookups and LLM calls per text chunk.
+
+    Returns the raw LLM events across chunks and whether any chunk was an event.
+    """
+
+    effective_llm_client = ctx.llm_client
+    limited_links = ctx.limited_links
+    channel_name = ctx.channel_name
+    metadata = ctx.metadata
+
     chunk_events: list[LLMEvent] = []
     chunk_is_event = False
     budget_checked = False
 
-    try:
-        for chunk_index, chunk_text in enumerate(text_chunks):
-            prompt_hash = _compute_prompt_hash(
-                llm_client=effective_llm_client,
-                chunk_text=chunk_text,
+    for chunk_index, chunk_text in enumerate(ctx.text_chunks):
+        prompt_hash = _compute_prompt_hash(
+            llm_client=effective_llm_client,
+            chunk_text=chunk_text,
+            links=limited_links,
+            message_ts_dt=candidate.ts_dt,
+            channel_name=channel_name,
+            chunk_index=chunk_index,
+            metadata=metadata,
+        )
+
+        llm_response: LLMResponse | None = None
+        if cache_ttl is not None:
+            cached_payload = repository.get_cached_llm_response(
+                prompt_hash, max_age=cache_ttl
+            )
+            if isinstance(cached_payload, str) and cached_payload:
+                try:
+                    llm_response = LLMResponse.model_validate_json(cached_payload)
+                except Exception as exc:
+                    logger.warning(
+                        "llm_cache_deserialization_failed",
+                        prompt_hash=prompt_hash,
+                        error=str(exc),
+                    )
+                    repository.invalidate_llm_cache_entry(prompt_hash)
+                else:
+                    metrics.cache_hits += 1
+                    logger.info(
+                        "llm_cache_hit",
+                        correlation_id=correlation_id,
+                        message_id=candidate.message_id[:8],
+                        prompt_hash=prompt_hash[:12],
+                        chunk_index=chunk_index,
+                        events_count=len(llm_response.events)
+                        if llm_response.events
+                        else 0,
+                    )
+                    repository.save_llm_call(
+                        LLMCallMetadata(
+                            message_id=candidate.message_id,
+                            prompt_hash=prompt_hash,
+                            model=effective_llm_client.model,
+                            tokens_in=0,
+                            tokens_out=0,
+                            cost_usd=0.0,
+                            latency_ms=0,
+                            cached=True,
+                        )
+                    )
+
+        if llm_response is None:
+            if enforce_budget and not budget_checked:
+                _ensure_budget_allows_call(repository=repository, settings=settings)
+                budget_checked = True
+
+            logger.debug(
+                "calling_llm_api",
+                correlation_id=correlation_id,
+                message_id=candidate.message_id[:8],
+                text_length=len(chunk_text),
+                links_count=len(limited_links),
+                chunk_index=chunk_index,
+            )
+
+            llm_response = effective_llm_client.extract_events_with_retry(
+                text=chunk_text,
                 links=limited_links,
                 message_ts_dt=candidate.ts_dt,
                 channel_name=channel_name,
                 chunk_index=chunk_index,
-                metadata=metadata,
+                context=metadata,
             )
 
-            llm_response: LLMResponse | None = None
-            if cache_ttl is not None:
-                cached_payload = repository.get_cached_llm_response(
-                    prompt_hash, max_age=cache_ttl
-                )
-                if isinstance(cached_payload, str) and cached_payload:
-                    try:
-                        llm_response = LLMResponse.model_validate_json(cached_payload)
-                    except Exception as exc:
-                        logger.warning(
-                            "llm_cache_deserialization_failed",
-                            prompt_hash=prompt_hash,
-                            error=str(exc),
-                        )
-                        repository.invalidate_llm_cache_entry(prompt_hash)
-                    else:
-                        metrics.cache_hits += 1
-                        logger.info(
-                            "llm_cache_hit",
-                            correlation_id=correlation_id,
-                            message_id=candidate.message_id[:8],
-                            prompt_hash=prompt_hash[:12],
-                            chunk_index=chunk_index,
-                            events_count=len(llm_response.events)
-                            if llm_response.events
-                            else 0,
-                        )
-                        repository.save_llm_call(
-                            LLMCallMetadata(
-                                message_id=candidate.message_id,
-                                prompt_hash=prompt_hash,
-                                model=effective_llm_client.model,
-                                tokens_in=0,
-                                tokens_out=0,
-                                cost_usd=0.0,
-                                latency_ms=0,
-                                cached=True,
-                            )
-                        )
+            logger.info(
+                "llm_response_received",
+                correlation_id=correlation_id,
+                message_id=candidate.message_id[:8],
+                is_event=llm_response.is_event,
+                events_count=len(llm_response.events) if llm_response.events else 0,
+                chunk_index=chunk_index,
+            )
 
-            if llm_response is None:
-                if enforce_budget and not budget_checked:
-                    _ensure_budget_allows_call(repository=repository, settings=settings)
-                    budget_checked = True
+            # Capture the original call's metadata before any rescue call
+            # replaces it inside the client.
+            metrics.llm_calls += 1
+            call_metadata = effective_llm_client.get_call_metadata()
+            call_metadata.message_id = candidate.message_id
+            call_metadata.prompt_hash = prompt_hash
+            call_metadata.cached = False
+            metrics.total_cost_usd += call_metadata.cost_usd
+            repository.save_llm_call(call_metadata)
 
-                logger.debug(
-                    "calling_llm_api",
+            should_try_rescue = (
+                ctx.rescue_enabled
+                and not llm_response.is_event
+                and not llm_response.events
+                and is_t_product_rescue_candidate(candidate.text_norm)
+            )
+
+            if should_try_rescue:
+                metrics.t_product_rescue_attempts += 1
+                logger.info(
+                    "t_product_rescue_attempt",
                     correlation_id=correlation_id,
                     message_id=candidate.message_id[:8],
-                    text_length=len(chunk_text),
-                    links_count=len(limited_links),
                     chunk_index=chunk_index,
                 )
 
-                llm_response = effective_llm_client.extract_events_with_retry(
-                    text=chunk_text,
+                rescue_text = _build_t_product_rescue_text(chunk_text)
+                rescue_response = effective_llm_client.extract_events_with_retry(
+                    text=rescue_text,
                     links=limited_links,
                     message_ts_dt=candidate.ts_dt,
                     channel_name=channel_name,
                     chunk_index=chunk_index,
                     context=metadata,
                 )
-
-                logger.info(
-                    "llm_response_received",
-                    correlation_id=correlation_id,
-                    message_id=candidate.message_id[:8],
-                    is_event=llm_response.is_event,
-                    events_count=len(llm_response.events) if llm_response.events else 0,
-                    chunk_index=chunk_index,
-                )
-
                 metrics.llm_calls += 1
 
-                call_metadata = effective_llm_client.get_call_metadata()
-                call_metadata.message_id = candidate.message_id
-                call_metadata.prompt_hash = prompt_hash
-                call_metadata.cached = False
-                metrics.total_cost_usd += call_metadata.cost_usd
+                rescue_call_metadata = effective_llm_client.get_call_metadata()
+                rescue_call_metadata.message_id = candidate.message_id
+                rescue_call_metadata.prompt_hash = f"{prompt_hash}:rescue"
+                rescue_call_metadata.cached = False
+                metrics.total_cost_usd += rescue_call_metadata.cost_usd
+                repository.save_llm_call(rescue_call_metadata)
 
-                repository.save_llm_call(call_metadata)
-                repository.save_llm_response(
-                    prompt_hash, llm_response.model_dump_json()
+                if rescue_response.is_event and rescue_response.events:
+                    llm_response = rescue_response
+                    metrics.t_product_rescue_recovered += 1
+                    logger.info(
+                        "t_product_rescue_recovered",
+                        correlation_id=correlation_id,
+                        message_id=candidate.message_id[:8],
+                        events_count=len(rescue_response.events),
+                        chunk_index=chunk_index,
+                    )
+
+            repository.save_llm_response(prompt_hash, llm_response.model_dump_json())
+
+        if llm_response.events:
+            chunk_events.extend(llm_response.events)
+        chunk_is_event = chunk_is_event or llm_response.is_event
+
+    return chunk_events, chunk_is_event
+
+
+def _postprocess_extracted_events(
+    *,
+    candidate: EventCandidate,
+    ctx: _CandidateContext,
+    chunk_events: list[LLMEvent],
+    repository: RepositoryProtocol,
+    settings: Settings,
+    object_registry: ObjectRegistry,
+    importance_scorer: ImportanceScorer,
+    validator: EventValidator,
+    metrics: CandidateExtractionMetrics,
+    correlation_id: str | None,
+) -> None:
+    """Convert, validate, score and persist LLM events for one candidate."""
+
+    channel_name = ctx.channel_name
+    candidate_source = ctx.source_id
+
+    max_events_raw = getattr(
+        settings, "llm_max_events_per_msg", LLM_MAX_EVENTS_PER_MSG_FALLBACK
+    )
+    try:
+        max_events = int(max_events_raw) if max_events_raw is not None else None
+    except (TypeError, ValueError):
+        max_events = LLM_MAX_EVENTS_PER_MSG_FALLBACK
+
+    if max_events is not None:
+        # Hard-collapse policy: 1 primary + optional 1 sub-event.
+        max_events = max(1, min(max_events, HARD_MAX_EVENTS_PER_MESSAGE))
+
+    from src.services.intra_message_postprocess import (
+        dedup_and_rank_events_for_message,
+        enforce_primary_sub_event_policy,
+    )
+
+    all_domain_events: list[Event] = []
+    for llm_event in chunk_events:
+        domain_event = convert_llm_event_to_domain(
+            llm_event,
+            message_id=candidate.message_id,
+            message_ts_dt=candidate.ts_dt,
+            channel_name=channel_name,
+            source_id=candidate_source,
+            object_registry=object_registry,
+        )
+
+        if getattr(settings, "extraction_time_completion_enabled", True):
+            completion = apply_time_completion_policy(
+                domain_event,
+                message_published_at=domain_event.message_published_at,
+                fallback_ts=candidate.ts_dt,
+            )
+            if completion.changed:
+                logger.warning(
+                    "time_completed_from_message_ts",
+                    correlation_id=correlation_id,
+                    message_id=candidate.message_id[:8],
+                    status=domain_event.status.value,
+                    completed_field=completion.completed_field,
+                    time_source=domain_event.time_source.value,
+                    time_confidence=domain_event.time_confidence,
                 )
+                domain_event.dedup_key = deduplicator.generate_dedup_key(domain_event)
 
-            if llm_response.events:
-                chunk_events.extend(llm_response.events)
-            chunk_is_event = chunk_is_event or llm_response.is_event
+        domain_event.thread_ts = candidate.thread_ts
+        all_domain_events.append(domain_event)
 
-        max_events_raw = getattr(settings, "llm_max_events_per_msg", 5)
+    selected_events = dedup_and_rank_events_for_message(
+        all_domain_events,
+        max_events=max_events,
+    )
+
+    policy_selected_events = enforce_primary_sub_event_policy(selected_events)
+
+    if len(all_domain_events) > len(policy_selected_events):
+        logger.info(
+            "llm_message_postprocess_reduced",
+            correlation_id=correlation_id,
+            message_id=candidate.message_id[:8],
+            original_count=len(all_domain_events),
+            selected_count=len(policy_selected_events),
+            max_events=max_events,
+        )
+
+    events_to_save: list[Event] = []
+    validation_errors: list[str] = []
+
+    reaction_count = candidate.features.reaction_count
+    mention_count = 1 if candidate.features.has_mention else 0
+
+    for domain_event in policy_selected_events:
+        importance_result = importance_scorer.calculate_importance(
+            domain_event,
+            llm_score=None,
+            reaction_count=reaction_count,
+            mention_count=mention_count,
+            is_duplicate=False,
+        )
+        domain_event.importance = importance_result.final_score
+
+        critical_errors = validator.get_critical_errors(domain_event)
+        validation_summary = validator.get_validation_summary(domain_event)
+
+        if critical_errors:
+            validation_errors.extend(
+                [
+                    f"Event {domain_event.object_name_raw}: {error}"
+                    for error in critical_errors
+                ]
+            )
+            logger.warning(
+                "event_validation_failed",
+                correlation_id=correlation_id,
+                event_object=domain_event.object_name_raw,
+                critical_errors=critical_errors,
+                warnings_count=len(validation_summary["warnings"]),
+                info_count=len(validation_summary["info"]),
+                reason="domain_rule_violations",
+            )
+            continue
+
+        if is_future_like_without_evidence(domain_event, candidate.text_norm):
+            metrics.future_like_events += 1
+            validation_errors.append(
+                f"Event {domain_event.object_name_raw}: planned_without_release_evidence"
+            )
+            logger.info(
+                "event_rejected_future_without_evidence",
+                correlation_id=correlation_id,
+                event_object=domain_event.object_name_raw,
+                message_id=candidate.message_id[:8],
+            )
+            continue
+
+        has_change, has_scope, has_effect = summary_contract_components(domain_event)
+        if (
+            not summary_has_change(domain_event.summary)
+            and has_change
+            and action_implies_change(domain_event.action)
+        ):
+            metrics.summary_contract_change_recovered_from_action += 1
+            logger.info(
+                "event_summary_change_recovered_from_action",
+                correlation_id=correlation_id,
+                event_object=domain_event.object_name_raw,
+                message_id=candidate.message_id[:8],
+                action=domain_event.action.value,
+            )
+
+        if not summary_meets_contract(domain_event, require_effect=False):
+            reason = "summary_contract_missing_change_or_scope"
+            if not has_change:
+                metrics.summary_contract_reject_missing_change += 1
+                reason = "summary_contract_missing_change"
+            elif not has_scope:
+                metrics.summary_contract_reject_missing_scope += 1
+                reason = "summary_contract_missing_scope"
+            validation_errors.append(f"Event {domain_event.object_name_raw}: {reason}")
+            logger.info(
+                "event_rejected_summary_contract",
+                correlation_id=correlation_id,
+                event_object=domain_event.object_name_raw,
+                message_id=candidate.message_id[:8],
+                reason=reason,
+            )
+            continue
+
+        if not has_effect:
+            metrics.summary_contract_soft_accept_missing_effect += 1
+            logger.info(
+                "event_summary_contract_soft_accepted",
+                correlation_id=correlation_id,
+                event_object=domain_event.object_name_raw,
+                message_id=candidate.message_id[:8],
+                reason="missing_effect",
+            )
+
+        events_to_save.append(domain_event)
+
+        if validation_summary["warnings"]:
+            logger.info(
+                "event_validation_warnings",
+                correlation_id=correlation_id,
+                event_object=domain_event.object_name_raw,
+                warnings=validation_summary["warnings"],
+            )
+
+    if events_to_save:
+        repository.save_events(events_to_save)
+        metrics.events_extracted += len(events_to_save)
+        metrics.dedup_required = True
+
+        if candidate.thread_ts:
+            _link_reply_events_to_thread_root(
+                candidate=candidate,
+                reply_events=events_to_save,
+                repository=repository,
+                correlation_id=correlation_id,
+            )
+
+        _record_unmatched_object_suggestions(
+            events=events_to_save,
+            repository=repository,
+            correlation_id=correlation_id,
+        )
+
+    total_events_processed = len(policy_selected_events)
+    blocked_events = total_events_processed - len(events_to_save)
+    saved_events = len(events_to_save)
+
+    if saved_events > 0:
+        metrics.event_message_count = 1
+    if saved_events > 1:
+        metrics.multi_event_message_count = 1
+
+    for event in events_to_save:
+        if event.action == ActionType.OTHER:
+            metrics.other_action_events += 1
+        if is_future_like_without_evidence(event, candidate.text_norm):
+            metrics.future_like_events += 1
+        if is_low_utility_summary(event):
+            metrics.low_utility_summaries += 1
+        if is_low_coverage_summary(event, candidate.text_norm):
+            metrics.low_coverage_summaries += 1
+
+    logger.info(
+        "validation_audit",
+        correlation_id=correlation_id,
+        message_id=candidate.message_id[:8],
+        saved_events=saved_events,
+        blocked_events=blocked_events,
+        total_issues=len(validation_errors),
+    )
+
+    if validation_errors:
+        critical_issues = len(
+            [
+                error
+                for error in validation_errors
+                if "critical" in error.lower()
+                or "required" in error.lower()
+                or "missing" in error.lower()
+            ]
+        )
+        logger.warning(
+            "validation_errors_detected",
+            correlation_id=correlation_id,
+            message_id=candidate.message_id[:8],
+            blocked_events=blocked_events,
+            critical_issues=critical_issues,
+            errors=validation_errors[:5],
+        )
+
+
+def _link_reply_events_to_thread_root(
+    *,
+    candidate: EventCandidate,
+    reply_events: list[Event],
+    repository: RepositoryProtocol,
+    correlation_id: str | None,
+) -> None:
+    """Link events extracted from a thread reply to the root message's events.
+
+    Creates an UPDATES relation from each reply event to each event of the
+    thread root. cluster_key is deliberately not inherited: a reply may talk
+    about a different object than the root.
+    """
+    from src.adapters.query_builders import EventQueryCriteria
+    from src.use_cases.ingest_messages import generate_message_id
+
+    root_message_id = generate_message_id(candidate.channel, candidate.thread_ts or "")
+    try:
+        root_events = repository.query_events(
+            EventQueryCriteria(message_ids=[root_message_id])
+        )
+    except Exception:  # linking must never fail extraction
+        logger.warning(
+            "thread_root_events_lookup_failed",
+            correlation_id=correlation_id,
+            message_id=candidate.message_id[:8],
+            thread_ts=candidate.thread_ts,
+        )
+        return
+
+    if not root_events:
+        return
+
+    linked = 0
+    for reply_event in reply_events:
+        for root_event in root_events:
+            if str(root_event.event_id) == str(reply_event.event_id):
+                continue
+            repository.save_event_relation(
+                str(reply_event.event_id),
+                RelationType.UPDATES.value,
+                str(root_event.event_id),
+            )
+            linked += 1
+
+    if linked:
+        logger.info(
+            "thread_reply_events_linked",
+            correlation_id=correlation_id,
+            message_id=candidate.message_id[:8],
+            thread_ts=candidate.thread_ts,
+            relations_created=linked,
+        )
+
+
+def _record_unmatched_object_suggestions(
+    *,
+    events: list[Event],
+    repository: RepositoryProtocol,
+    correlation_id: str | None,
+) -> None:
+    """Queue registry suggestions for events whose object was not canonicalized.
+
+    Best-effort: suggestion recording must never affect extraction.
+    """
+    for event in events:
+        if event.object_id is not None or not event.object_name_raw:
+            continue
         try:
-            max_events = int(max_events_raw) if max_events_raw is not None else None
-        except (TypeError, ValueError):
-            max_events = 5
+            repository.record_object_suggestion(
+                event.object_name_raw, str(event.event_id)
+            )
+        except Exception:  # suggestions must never fail extraction
+            logger.warning(
+                "object_suggestion_record_failed",
+                correlation_id=correlation_id,
+                object_name_raw=event.object_name_raw,
+            )
+
+
+def _process_candidate_with_llm(
+    *,
+    candidate: EventCandidate,
+    llm_client: LLMClient,
+    llm_client_pool: LLMClientPool | None,
+    repository: RepositoryProtocol,
+    settings: Settings,
+    cache_ttl: timedelta | None,
+    object_registry: ObjectRegistry,
+    importance_scorer: ImportanceScorer,
+    validator: EventValidator,
+    correlation_id: str | None,
+    position: int | None,
+    total_candidates: int | None,
+    enforce_budget: bool,
+) -> CandidateExtractionMetrics:
+    """Extract events for a single candidate: prepare -> LLM chunks -> postprocess."""
+
+    metrics = CandidateExtractionMetrics()
+    release_evidence = has_release_fact_evidence(candidate.text_norm)
+
+    if is_non_event_message(candidate.text_norm) and not release_evidence:
+        logger.info(
+            "candidate_rejected_non_event_policy",
+            correlation_id=correlation_id,
+            message_id=candidate.message_id[:8],
+            source=candidate.source_id.value,
+            channel=candidate.channel,
+        )
+        repository.update_candidate_status(
+            candidate.message_id, CandidateStatus.LLM_OK.value
+        )
+        return metrics
+
+    ctx = _prepare_candidate_for_extraction(
+        candidate=candidate,
+        llm_client=llm_client,
+        llm_client_pool=llm_client_pool,
+        repository=repository,
+        settings=settings,
+        correlation_id=correlation_id,
+        position=position,
+        total_candidates=total_candidates,
+    )
+
+    try:
+        chunk_events, chunk_is_event = _process_candidate_chunks(
+            candidate=candidate,
+            ctx=ctx,
+            repository=repository,
+            settings=settings,
+            cache_ttl=cache_ttl,
+            enforce_budget=enforce_budget,
+            metrics=metrics,
+            correlation_id=correlation_id,
+        )
 
         if chunk_is_event and chunk_events:
-            from src.services.intra_message_postprocess import (
-                dedup_and_rank_events_for_message,
-            )
-
-            all_domain_events: list[Event] = []
-            for llm_event in chunk_events:
-                domain_event = convert_llm_event_to_domain(
-                    llm_event,
-                    message_id=candidate.message_id,
-                    message_ts_dt=candidate.ts_dt,
-                    channel_name=channel_name,
-                    source_id=candidate_source,
-                    object_registry=object_registry,
-                )
-
-                if getattr(settings, "extraction_time_completion_enabled", True):
-                    completion = apply_time_completion_policy(
-                        domain_event,
-                        message_published_at=domain_event.message_published_at,
-                        fallback_ts=candidate.ts_dt,
-                    )
-                    if completion.changed:
-                        logger.warning(
-                            "time_completed_from_message_ts",
-                            correlation_id=correlation_id,
-                            message_id=candidate.message_id[:8],
-                            status=domain_event.status.value,
-                            completed_field=completion.completed_field,
-                            time_source=domain_event.time_source.value,
-                            time_confidence=domain_event.time_confidence,
-                        )
-                        domain_event.dedup_key = deduplicator.generate_dedup_key(
-                            domain_event
-                        )
-
-                all_domain_events.append(domain_event)
-
-            selected_events = dedup_and_rank_events_for_message(
-                all_domain_events,
-                max_events=max_events,
-            )
-
-            if len(all_domain_events) > len(selected_events):
-                logger.info(
-                    "llm_message_postprocess_reduced",
-                    correlation_id=correlation_id,
-                    message_id=candidate.message_id[:8],
-                    original_count=len(all_domain_events),
-                    selected_count=len(selected_events),
-                    max_events=max_events,
-                )
-
-            events_to_save: list[Event] = []
-            validation_errors: list[str] = []
-
-            reaction_count = candidate.features.reaction_count
-            mention_count = 1 if candidate.features.has_mention else 0
-
-            for domain_event in selected_events:
-                importance_result = importance_scorer.calculate_importance(
-                    domain_event,
-                    llm_score=None,
-                    reaction_count=reaction_count,
-                    mention_count=mention_count,
-                    is_duplicate=False,
-                )
-                domain_event.importance = importance_result.final_score
-
-                critical_errors = validator.get_critical_errors(domain_event)
-                validation_summary = validator.get_validation_summary(domain_event)
-
-                if critical_errors:
-                    validation_errors.extend(
-                        [
-                            f"Event {domain_event.object_name_raw}: {error}"
-                            for error in critical_errors
-                        ]
-                    )
-                    logger.warning(
-                        "event_validation_failed",
-                        correlation_id=correlation_id,
-                        event_object=domain_event.object_name_raw,
-                        critical_errors=critical_errors,
-                        warnings_count=len(validation_summary["warnings"]),
-                        info_count=len(validation_summary["info"]),
-                        reason="domain_rule_violations",
-                    )
-                    continue
-
-                events_to_save.append(domain_event)
-
-                if validation_summary["warnings"]:
-                    logger.info(
-                        "event_validation_warnings",
-                        correlation_id=correlation_id,
-                        event_object=domain_event.object_name_raw,
-                        warnings=validation_summary["warnings"],
-                    )
-
-            if events_to_save:
-                repository.save_events(events_to_save)
-                metrics.events_extracted += len(events_to_save)
-                metrics.dedup_required = True
-
-            total_events_processed = len(selected_events)
-            blocked_events = total_events_processed - len(events_to_save)
-            saved_events = len(events_to_save)
-
-            logger.info(
-                "validation_audit",
+            _postprocess_extracted_events(
+                candidate=candidate,
+                ctx=ctx,
+                chunk_events=chunk_events,
+                repository=repository,
+                settings=settings,
+                object_registry=object_registry,
+                importance_scorer=importance_scorer,
+                validator=validator,
+                metrics=metrics,
                 correlation_id=correlation_id,
-                message_id=candidate.message_id[:8],
-                saved_events=saved_events,
-                blocked_events=blocked_events,
-                total_issues=len(validation_errors),
             )
-
-            if validation_errors:
-                critical_issues = len(
-                    [
-                        error
-                        for error in validation_errors
-                        if "critical" in error.lower()
-                        or "required" in error.lower()
-                        or "missing" in error.lower()
-                    ]
-                )
-                logger.warning(
-                    "validation_errors_detected",
-                    correlation_id=correlation_id,
-                    message_id=candidate.message_id[:8],
-                    blocked_events=blocked_events,
-                    critical_issues=critical_issues,
-                    errors=validation_errors[:5],
-                )
 
         repository.update_candidate_status(
             candidate.message_id, CandidateStatus.LLM_OK.value
@@ -848,6 +1251,18 @@ def extract_events_use_case(
             cache_hits = 0
             total_cost = 0.0
             errors: list[str] = []
+            event_message_count = 0
+            multi_event_message_count = 0
+            future_like_events = 0
+            other_action_events = 0
+            low_utility_summaries = 0
+            low_coverage_summaries = 0
+            summary_contract_reject_missing_change = 0
+            summary_contract_reject_missing_scope = 0
+            summary_contract_soft_accept_missing_effect = 0
+            summary_contract_change_recovered_from_action = 0
+            t_product_rescue_attempts = 0
+            t_product_rescue_recovered = 0
             cache_ttl = _resolve_cache_ttl(settings)
             validator = event_validator or _get_event_validator()
             llm_pool = (
@@ -880,6 +1295,26 @@ def extract_events_use_case(
                 cache_hits += metrics.cache_hits
                 total_cost += metrics.total_cost_usd
                 errors.extend(metrics.errors)
+                event_message_count += metrics.event_message_count
+                multi_event_message_count += metrics.multi_event_message_count
+                future_like_events += metrics.future_like_events
+                other_action_events += metrics.other_action_events
+                low_utility_summaries += metrics.low_utility_summaries
+                low_coverage_summaries += metrics.low_coverage_summaries
+                summary_contract_reject_missing_change += (
+                    metrics.summary_contract_reject_missing_change
+                )
+                summary_contract_reject_missing_scope += (
+                    metrics.summary_contract_reject_missing_scope
+                )
+                summary_contract_soft_accept_missing_effect += (
+                    metrics.summary_contract_soft_accept_missing_effect
+                )
+                summary_contract_change_recovered_from_action += (
+                    metrics.summary_contract_change_recovered_from_action
+                )
+                t_product_rescue_attempts += metrics.t_product_rescue_attempts
+                t_product_rescue_recovered += metrics.t_product_rescue_recovered
 
                 if metrics.budget_exhausted:
                     logger.warning(
@@ -897,6 +1332,45 @@ def extract_events_use_case(
                 total_cost_usd=total_cost,
                 errors=errors,
             )
+            if events_extracted > 0:
+                logger.info(
+                    "pipeline_quality_snapshot",
+                    correlation_id=bound_correlation_id,
+                    event_messages=event_message_count,
+                    events_total=events_extracted,
+                    multi_event_messages=multi_event_message_count,
+                    pct_multi_event_messages=round(
+                        (multi_event_message_count / event_message_count) * 100, 2
+                    )
+                    if event_message_count
+                    else 0.0,
+                    future_like_events=future_like_events,
+                    pct_future_like=round((future_like_events / events_extracted) * 100, 2),
+                    other_action_events=other_action_events,
+                    pct_action_other=round((other_action_events / events_extracted) * 100, 2),
+                    low_utility_summaries=low_utility_summaries,
+                    pct_low_utility=round(
+                        (low_utility_summaries / events_extracted) * 100, 2
+                    ),
+                    low_coverage_summaries=low_coverage_summaries,
+                    pct_low_coverage=round(
+                        (low_coverage_summaries / events_extracted) * 100, 2
+                    ),
+                    summary_contract_reject_missing_change=summary_contract_reject_missing_change,
+                    summary_contract_reject_missing_scope=summary_contract_reject_missing_scope,
+                    summary_contract_soft_accept_missing_effect=summary_contract_soft_accept_missing_effect,
+                    summary_contract_soft_accept_rate=round(
+                        (
+                            summary_contract_soft_accept_missing_effect
+                            / events_extracted
+                        )
+                        * 100,
+                        2,
+                    ),
+                    summary_contract_change_recovered_from_action=summary_contract_change_recovered_from_action,
+                    t_product_rescue_attempts=t_product_rescue_attempts,
+                    t_product_rescue_recovered=t_product_rescue_recovered,
+                )
             final_log_payload = {
                 "events_extracted": final_result.events_extracted,
                 "candidates_processed": final_result.candidates_processed,

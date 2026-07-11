@@ -96,6 +96,7 @@ def build_candidates_use_case(
                 status=CandidateStatus.NEW,
                 features=features,
                 source_id=message.source_id,  # Preserve source from message
+                thread_ts=getattr(message, "thread_ts", None),
             )
             candidates_to_save.append(candidate)
 

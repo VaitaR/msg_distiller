@@ -21,6 +21,7 @@ logger = get_logger(__name__)
 
 # Confidence threshold: events above this are auto-published
 AUTO_PUBLISH_CONFIDENCE_THRESHOLD = 0.95
+EDITABLE_EVENT_FIELDS = frozenset({"title", "summary", "why_it_matters"})
 
 
 class ReviewEventsUseCase:
@@ -173,6 +174,12 @@ class ReviewEventsUseCase:
         Returns:
             True if successful
         """
+        unsupported_fields = sorted(set(updates) - EDITABLE_EVENT_FIELDS)
+        if unsupported_fields:
+            raise ValueError(
+                "Unsupported editable fields: " + ", ".join(unsupported_fields)
+            )
+
         event = self._repo.get_event_by_id(event_id)
         if event is None:
             logger.warning("review_edit_not_found", event_id=event_id)

@@ -93,3 +93,38 @@ def dedup_and_rank_events_for_message(
     if max_events <= 0:
         return []
     return selected[:max_events]
+
+
+def enforce_primary_sub_event_policy(events: list[Event]) -> list[Event]:
+    """Allow one primary event and at most one tightly-bound sub-event.
+
+    Primary event is the first event (already ranked by importance/confidence in caller).
+    A sub-event is allowed only when tightly bound to the same release/change unit.
+    """
+
+    if not events:
+        return []
+
+    primary = events[0]
+    if len(events) == 1:
+        return [primary]
+
+    secondary = events[1]
+
+    # Tight binding via shared anchor or same object+action pair.
+    primary_anchor = (primary.anchor or (primary.anchors[0] if primary.anchors else "")).strip().lower()
+    secondary_anchor = (
+        secondary.anchor or (secondary.anchors[0] if secondary.anchors else "")
+    ).strip().lower()
+    shared_anchor = bool(primary_anchor and secondary_anchor and primary_anchor == secondary_anchor)
+
+    shared_object = (
+        (primary.object_id or primary.object_name_raw).strip().lower()
+        == (secondary.object_id or secondary.object_name_raw).strip().lower()
+    )
+    shared_action = primary.action == secondary.action
+
+    if shared_anchor or (shared_object and shared_action):
+        return [primary, secondary]
+
+    return [primary]

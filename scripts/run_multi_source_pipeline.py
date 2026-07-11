@@ -40,6 +40,8 @@ from src.domain.protocols import RepositoryProtocol
 from src.services.importance_scorer import ImportanceScorer
 from src.use_cases.build_candidates import build_candidates_use_case
 from src.use_cases.deduplicate_events import deduplicate_events_use_case
+from src.use_cases.embed_events import embed_events_use_case
+from src.use_cases.semantic_dedup import semantic_dedup_use_case
 from src.use_cases.extract_events import build_object_registry, extract_events_use_case
 from src.use_cases.ingest_messages import ingest_messages_use_case
 from src.use_cases.ingest_telegram_messages import (
@@ -430,6 +432,35 @@ def run_single_iteration(
         f"channels_processed={total_stats['channels_processed']}, "
         f"errors_count={len(total_stats['errors'])}"
     )
+
+    # STEP 4.5: Embeddings + cross-source semantic dedup (across all sources)
+    if settings.embeddings_enabled and not _shutdown_requested:
+        logger.info(
+            "pipeline_step_started: step=4.5, step_name=embed_and_semantic_dedup"
+        )
+        try:
+            embedding_llm_client = LLMClient(
+                api_key=settings.openai_api_key.get_secret_value(),
+                model=settings.llm_model,
+                timeout=settings.llm_timeout_seconds,
+            )
+            embed_stats = embed_events_use_case(
+                repository=repository,
+                llm_client=embedding_llm_client,
+                settings=settings,
+            )
+            semantic_stats = semantic_dedup_use_case(
+                repository=repository,
+                settings=settings,
+            )
+            logger.info(
+                f"embed_and_semantic_dedup_finished: "
+                f"events_embedded={embed_stats['events_embedded']}, "
+                f"semantic_merged={semantic_stats['merged']}, "
+                f"semantic_suspected={semantic_stats['suspected']}"
+            )
+        except Exception as e:
+            logger.error(f"embed_and_semantic_dedup_failed: {str(e)}", exc_info=True)
 
     # STEP 5: Publish digest (optional, across all sources)
     if args.publish:

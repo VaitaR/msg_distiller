@@ -187,6 +187,7 @@ class RelationType(str, Enum):
     CANCELED_OF = "canceled_of"
     UPDATES = "updates"
     ABSORBED_FROM = "absorbed_from"  # Survivor absorbed another event into itself
+    DUPLICATE_SUSPECT = "duplicate_suspect"  # Semantic similarity, needs human review
 
 
 class ChannelConfig(BaseModel):
@@ -216,6 +217,13 @@ class ChannelConfig(BaseModel):
     prompt_file: str = Field(
         default="",
         description="Path to LLM prompt template file (empty = use source default)",
+    )
+    rescue_enabled: bool = Field(
+        default=False,
+        description=(
+            "Retry non-event LLM responses with a rescue prompt for terse "
+            "internal decision/announcement messages"
+        ),
     )
     enabled: bool = Field(
         default=True,
@@ -311,6 +319,10 @@ class SlackMessage(BaseModel):
     )
     total_reactions: int = Field(default=0, description="Total number of reactions")
     reply_count: int = Field(default=0, description="Number of thread replies")
+    thread_ts: str | None = Field(
+        default=None,
+        description="Root message ts if this message belongs to a thread (None for roots)",
+    )
     is_reply: bool = Field(default=False, description="Whether message is a reply")
     reply_to_id: str | None = Field(
         default=None, description="Parent message identifier if threaded"
@@ -460,6 +472,10 @@ class EventCandidate(BaseModel):
     source_id: MessageSource = Field(
         default=MessageSource.SLACK, description="Message source"
     )
+    thread_ts: str | None = Field(
+        default=None,
+        description="Root message ts if the source message is a thread reply",
+    )
     lease_attempts: int = Field(
         default=0,
         ge=0,
@@ -503,6 +519,10 @@ class Event(BaseModel):
     )
     extracted_at: datetime = Field(
         default_factory=_utcnow, description="Extraction timestamp"
+    )
+    thread_ts: str | None = Field(
+        default=None,
+        description="Root message ts if the source message was a thread reply",
     )
 
     # 3.2 Title Slots (source of truth for title generation)
@@ -802,6 +822,30 @@ class DeduplicationResult(BaseModel):
     new_events: int
     merged_events: int
     total_events: int
+
+
+class EventStory(BaseModel):
+    """Computed lifecycle aggregate of events sharing a cluster_key.
+
+    Not persisted: assembled on demand from the events table. current_status
+    is the status of the latest event in the chronology.
+    """
+
+    cluster_key: str
+    action: str
+    object_id: str | None = None
+    object_name_raw: str
+    current_status: str
+    event_count: int
+    first_seen: datetime
+    last_seen: datetime
+    sources: list[str] = Field(default_factory=list)
+    max_importance: int = 0
+    events: list[Event] = Field(default_factory=list)
+    followups: list[Event] = Field(
+        default_factory=list,
+        description="Events linked via UPDATES relations (e.g. thread replies)",
+    )
 
 
 class DigestResult(BaseModel):

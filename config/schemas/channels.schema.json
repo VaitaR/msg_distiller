@@ -48,6 +48,15 @@
             },
             "uniqueItems": true,
             "description": "Bot user IDs that should not be penalized"
+          },
+          "prompt_file": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Path to LLM prompt template file (omit to use source default)"
+          },
+          "rescue_enabled": {
+            "type": "boolean",
+            "description": "Retry non-event LLM responses with a rescue prompt"
           }
         },
         "required": ["channel_id", "channel_name"],

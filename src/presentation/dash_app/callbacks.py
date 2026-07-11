@@ -3,6 +3,7 @@
 Fetches data from API backend via httpx, renders into layout components.
 """
 
+import os
 from datetime import UTC, datetime
 from typing import Any
 
@@ -19,12 +20,25 @@ from src.presentation.dash_app.layout_timeline import CATEGORY_COLORS, timeline_
 
 # Timeout for API calls
 API_TIMEOUT = 10.0
+REVIEW_API_TOKEN = os.getenv("REVIEW_API_TOKEN", "")
+
+
+def _request_headers(*, include_write_token: bool = False) -> dict[str, str] | None:
+    headers: dict[str, str] = {}
+    if include_write_token and REVIEW_API_TOKEN:
+        headers["X-Review-Api-Token"] = REVIEW_API_TOKEN
+    return headers or None
 
 
 def _api_get(base: str, path: str, params: dict[str, Any] | None = None) -> Any:
     """Make a GET request to the API backend."""
     try:
-        r = httpx.get(f"{base}{path}", params=params, timeout=API_TIMEOUT)
+        r = httpx.get(
+            f"{base}{path}",
+            params=params,
+            headers=_request_headers(),
+            timeout=API_TIMEOUT,
+        )
         r.raise_for_status()
         return r.json()
     except httpx.HTTPError:
@@ -34,7 +48,12 @@ def _api_get(base: str, path: str, params: dict[str, Any] | None = None) -> Any:
 def _api_post(base: str, path: str, json: dict[str, Any]) -> Any:
     """Make a POST request to the API backend."""
     try:
-        r = httpx.post(f"{base}{path}", json=json, timeout=API_TIMEOUT)
+        r = httpx.post(
+            f"{base}{path}",
+            json=json,
+            headers=_request_headers(include_write_token=True),
+            timeout=API_TIMEOUT,
+        )
         r.raise_for_status()
         return r.json()
     except httpx.HTTPError:
@@ -44,7 +63,12 @@ def _api_post(base: str, path: str, json: dict[str, Any]) -> Any:
 def _api_patch(base: str, path: str, json: dict[str, Any]) -> Any:
     """Make a PATCH request to the API backend."""
     try:
-        r = httpx.patch(f"{base}{path}", json=json, timeout=API_TIMEOUT)
+        r = httpx.patch(
+            f"{base}{path}",
+            json=json,
+            headers=_request_headers(include_write_token=True),
+            timeout=API_TIMEOUT,
+        )
         r.raise_for_status()
         return r.json()
     except httpx.HTTPError:

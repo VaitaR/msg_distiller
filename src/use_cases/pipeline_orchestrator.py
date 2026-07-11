@@ -25,8 +25,10 @@ from src.services.importance_scorer import ImportanceScorer
 from src.services.object_registry import ObjectRegistry
 from src.use_cases.build_candidates import build_candidates_use_case
 from src.use_cases.deduplicate_events import deduplicate_events_use_case
+from src.use_cases.embed_events import embed_events_use_case
 from src.use_cases.extract_events import build_object_registry, extract_events_use_case
 from src.use_cases.ingest_messages import ingest_messages_use_case
+from src.use_cases.semantic_dedup import semantic_dedup_use_case
 
 logger = get_logger(__name__)
 _PIPELINE_JOB_NAME: Final[str] = "ingest_and_extract"
@@ -57,6 +59,8 @@ class PipelineResult:
     candidates: dict[str, object]
     extract: dict[str, object]
     dedup: dict[str, object]
+    embeddings: dict[str, int] | None = None
+    semantic_dedup: dict[str, int] | None = None
 
 
 @dataclass
@@ -178,6 +182,21 @@ def run_ingest_and_extract_pipeline(
             correlation_id=correlation_id,
         )
 
+        embed_stats: dict[str, int] | None = None
+        semantic_stats: dict[str, int] | None = None
+        if deps.settings.embeddings_enabled:
+            reporter.update(progress=0.92, message="Embedding events")
+            embed_stats = embed_events_use_case(
+                repository=deps.repository,
+                llm_client=deps.llm_client,
+                settings=deps.settings,
+            )
+            semantic_stats = semantic_dedup_use_case(
+                repository=deps.repository,
+                settings=deps.settings,
+                correlation_id=correlation_id,
+            )
+
         reporter.update(progress=1.0, message="Pipeline complete")
 
         logger.info(
@@ -196,6 +215,8 @@ def run_ingest_and_extract_pipeline(
         candidates=candidate_result.model_dump(),
         extract=extraction_result.model_dump(),
         dedup=dedup_result.model_dump(),
+        embeddings=embed_stats,
+        semantic_dedup=semantic_stats,
     )
 
 

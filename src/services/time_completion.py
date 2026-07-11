@@ -13,6 +13,7 @@ from datetime import datetime
 import pytz
 
 from src.domain.models import Event, EventStatus, TimeSource
+from src.domain.validation_constants import TIME_COMPLETION_CONFIDENCE_CAP
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,7 +36,7 @@ def apply_time_completion_policy(
     *,
     message_published_at: datetime | None,
     fallback_ts: datetime,
-    confidence_cap: float = 0.3,
+    confidence_cap: float = TIME_COMPLETION_CONFIDENCE_CAP,
 ) -> TimeCompletionResult:
     """Fill missing required time fields based on event status.
 

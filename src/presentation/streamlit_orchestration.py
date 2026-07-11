@@ -140,6 +140,8 @@ def _create_job_handler() -> Callable[
             "candidates": result.candidates,
             "extract": result.extract,
             "dedup": result.dedup,
+            "embeddings": result.embeddings,
+            "semantic_dedup": result.semantic_dedup,
         }
 
     return _handler

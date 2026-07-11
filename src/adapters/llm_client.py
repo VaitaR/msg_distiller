@@ -33,7 +33,12 @@ TOKEN_COSTS: Final[dict[str, dict[str, float]]] = {
     "gpt-4o-mini": {"input": 0.150, "output": 0.600},  # per 1M tokens
     "gpt-4o": {"input": 2.50, "output": 10.00},
     "gpt-3.5-turbo": {"input": 0.50, "output": 1.50},
+    "text-embedding-3-small": {"input": 0.020, "output": 0.0},
+    "text-embedding-3-large": {"input": 0.130, "output": 0.0},
 }
+
+EMBEDDING_MODEL_DEFAULT: Final[str] = "text-embedding-3-small"
+EMBEDDING_DIMENSIONS: Final[int] = 1536
 
 # Preview lengths for logging (characters)
 PREVIEW_LENGTH_PROMPT: Final[int] = 800
@@ -544,6 +549,73 @@ class LLMClient:
             )
         else:
             raise LLMAPIError(f"Failed after {max_retries + 1} attempts: {last_error}")
+
+    def embed_texts(
+        self,
+        texts: list[str],
+        *,
+        model: str = EMBEDDING_MODEL_DEFAULT,
+    ) -> list[list[float]]:
+        """Embed a batch of texts; returns vectors in input order.
+
+        Args:
+            texts: Texts to embed (one API call for the whole batch)
+            model: Embedding model name
+
+        Returns:
+            One embedding vector per input text, in input order
+
+        Raises:
+            LLMAPIError: On API communication errors
+        """
+        if not texts:
+            return []
+
+        start_time = time.time()
+        try:
+            response = self.client.embeddings.create(model=model, input=texts)
+        except OpenAIRateLimitError as e:
+            logger.error("embedding_rate_limit_error", error=str(e), model=model)
+            raise LLMAPIError(f"Rate limit exceeded: {e}")
+        except APIError as e:
+            logger.error("embedding_api_error", error=str(e), model=model)
+            raise LLMAPIError(f"OpenAI API error: {e}")
+
+        latency_ms = int((time.time() - start_time) * 1000)
+        tokens_in = response.usage.prompt_tokens if response.usage else 0
+        costs = TOKEN_COSTS.get(model, {"input": 0.0, "output": 0.0})
+        cost_usd = (tokens_in / 1_000_000) * costs["input"]
+
+        vectors = [
+            item.embedding for item in sorted(response.data, key=lambda d: d.index)
+        ]
+        if len(vectors) != len(texts):
+            raise LLMAPIError(
+                f"Embedding count mismatch: got {len(vectors)} for {len(texts)} texts"
+            )
+
+        self._last_call_metadata = LLMCallMetadata(
+            message_id="",  # Will be set by caller
+            prompt_hash=f"embedding:{model}",
+            model=model,
+            tokens_in=tokens_in,
+            tokens_out=0,
+            cost_usd=cost_usd,
+            latency_ms=latency_ms,
+            cached=False,
+            ts=datetime.now(tz=pytz.UTC),
+        )
+
+        logger.info(
+            "embedding_batch_success",
+            model=model,
+            batch_size=len(texts),
+            tokens_in=tokens_in,
+            cost_usd=round(cost_usd, 6),
+            latency_ms=latency_ms,
+        )
+
+        return vectors
 
     def get_call_metadata(self) -> LLMCallMetadata:
         """Get metadata for last LLM call.
