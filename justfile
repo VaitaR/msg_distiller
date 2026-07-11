@@ -70,7 +70,7 @@ test-quick:
 
 # Tests with coverage
 test-cov:
-    SLACK_BOT_TOKEN=dummy OPENAI_API_KEY=dummy uv run pytest --cov=src --cov-report=term-missing --cov-report=html
+    SLACK_BOT_TOKEN=dummy OPENAI_API_KEY=dummy REVIEW_API_TOKEN=test-review-token uv run pytest --cov=src --cov-report=term-missing --cov-report=html --cov-report=xml:coverage.xml
 
 # Run API tests only
 test-api:
@@ -80,10 +80,14 @@ test-api:
 test-e2e:
     SKIP_E2E=0 SLACK_BOT_TOKEN=dummy OPENAI_API_KEY=dummy uv run pytest tests/e2e/ -v --timeout=120
 
+# Run frontend quality checks (matches GitHub Actions)
+frontend-ci:
+    cd frontend && npm run lint && npm run typecheck && npm run build && npm run test
+
 # ─── CI ─────────────────────────────────────────────────────────────────
 
 # Full CI pipeline (matches GitHub Actions)
-ci: fmt-check lint typecheck test
+ci: fmt-check lint typecheck test frontend-ci
     @echo "✓ All CI checks passed"
 
 # Pre-commit hooks

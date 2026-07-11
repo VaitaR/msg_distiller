@@ -1,4 +1,4 @@
-.PHONY: help install install-pip sync sync-dev lock lock-check format lint typecheck test ci clean makefile
+.PHONY: help install install-pip sync sync-dev lock lock-check format lint typecheck test frontend-ci ci clean makefile
 
 # Colors for output
 BLUE := \033[0;34m
@@ -76,7 +76,11 @@ test-quick: ## Run tests without coverage
 
 test-cov: ## Run tests with coverage report
 	@echo "$(BLUE)Running tests with coverage...$(NC)"
-	@SLACK_BOT_TOKEN=dummy OPENAI_API_KEY=dummy uv run pytest --cov=src --cov-report=term-missing --cov-report=html && echo "$(GREEN)✓ Tests passed with coverage$(NC)" || (echo "$(RED)✗ Tests failed$(NC)" && exit 1)
+	@SLACK_BOT_TOKEN=dummy OPENAI_API_KEY=dummy REVIEW_API_TOKEN=test-review-token uv run pytest --cov=src --cov-report=term-missing --cov-report=html --cov-report=xml:coverage.xml && echo "$(GREEN)✓ Tests passed with coverage$(NC)" || (echo "$(RED)✗ Tests failed$(NC)" && exit 1)
+
+frontend-ci: ## Run frontend quality checks (matches GitHub Actions)
+	@echo "$(BLUE)Running frontend quality checks...$(NC)"
+	@cd frontend && npm run lint && npm run typecheck && npm run build && npm run test && echo "$(GREEN)✓ Frontend checks passed$(NC)" || (echo "$(RED)✗ Frontend checks failed$(NC)" && exit 1)
 
 test-postgres: ## Run PostgreSQL tests (requires PostgreSQL running and TEST_POSTGRES=1)
 	@echo "$(BLUE)Running PostgreSQL tests...$(NC)"
@@ -120,7 +124,7 @@ pre-push: ## Run pre-push checks (matches CI exactly)
 
 ci: ## Run all CI checks (format, lint, typecheck, test) - matches GitHub Actions
 	@echo "$(BLUE)Running CI pipeline...$(NC)"
-	@make format-check && make lint && make typecheck && make test && echo "$(GREEN)✓ All CI checks passed!$(NC)"
+	@make format-check && make lint && make typecheck && make test && make frontend-ci && echo "$(GREEN)✓ All CI checks passed!$(NC)"
 
 makefile: ## Run all linters and tests (alias for ci)
 	@$(MAKE) ci
@@ -130,26 +134,29 @@ ci-local: ## Run CI checks locally (same as GitHub Actions)
 	@echo "$(BLUE)   Running CI Pipeline (Local)$(NC)"
 	@echo "$(BLUE)===========================================$(NC)"
 	@echo ""
-	@echo "$(YELLOW)Step 0/7: Lock Check$(NC)"
+	@echo "$(YELLOW)Step 0/8: Lock Check$(NC)"
 	@make lock-check
 	@echo ""
-	@echo "$(YELLOW)Step 1/7: Sync Dependencies (frozen)$(NC)"
+	@echo "$(YELLOW)Step 1/8: Sync Dependencies (frozen)$(NC)"
 	@make sync-dev
 	@echo ""
-	@echo "$(YELLOW)Step 2/7: Pre-commit (auto-fix)$(NC)"
+	@echo "$(YELLOW)Step 2/8: Pre-commit (auto-fix)$(NC)"
 	@make pre-commit
 	@echo ""
-	@echo "$(YELLOW)Step 3/7: Format Check$(NC)"
+	@echo "$(YELLOW)Step 3/8: Format Check$(NC)"
 	@make format-check
 	@echo ""
-	@echo "$(YELLOW)Step 4/7: Lint$(NC)"
+	@echo "$(YELLOW)Step 4/8: Lint$(NC)"
 	@make lint
 	@echo ""
-	@echo "$(YELLOW)Step 5/7: Type Check$(NC)"
+	@echo "$(YELLOW)Step 5/8: Type Check$(NC)"
 	@make typecheck
 	@echo ""
-	@echo "$(YELLOW)Step 6/7: Tests$(NC)"
+	@echo "$(YELLOW)Step 6/8: Tests$(NC)"
 	@make test
+	@echo ""
+	@echo "$(YELLOW)Step 7/8: Frontend Checks$(NC)"
+	@make frontend-ci
 	@echo ""
 	@echo "$(GREEN)===========================================$(NC)"
 	@echo "$(GREEN)   ✓ CI Pipeline Passed!$(NC)"

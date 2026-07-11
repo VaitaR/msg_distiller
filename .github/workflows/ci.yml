@@ -67,6 +67,38 @@ jobs:
         run: |
           uv run mypy src --config-file pyproject.toml
 
+  frontend:
+    name: Frontend Quality
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Frontend lint
+        run: npm run lint
+
+      - name: Frontend typecheck
+        run: npm run typecheck
+
+      - name: Frontend build
+        run: npm run build
+
+      - name: Frontend unit tests
+        run: npm run test
+
   test:
     name: Run Tests
     runs-on: ubuntu-latest
@@ -94,8 +126,9 @@ jobs:
         env:
           SLACK_BOT_TOKEN: dummy
           OPENAI_API_KEY: dummy
+          REVIEW_API_TOKEN: test-review-token
         run: |
-          uv run python -m pytest --cov=src --cov-report=term-missing --cov-report=html --timeout=30
+          uv run python -m pytest --cov=src --cov-report=term-missing --cov-report=html --cov-report=xml:coverage.xml --timeout=30
 
       - name: Upload coverage HTML report
         if: always()

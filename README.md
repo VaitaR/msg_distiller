@@ -37,6 +37,7 @@ src/
   services/        # Scoring, dedup, normalization, object registry, etc.
   use_cases/       # Ingest/extract/dedup/publish orchestration
   workers/         # Task-queue workers
+frontend/          # React/TypeScript MVP frontend
 scripts/           # CLI entry points and operational scripts
 config/defaults/   # Example YAML templates copied by setup script
 ```
@@ -161,6 +162,37 @@ docker compose up -d
 
 Services include PostgreSQL, pipeline scheduler/workers, Telegram worker, metrics exporter, and Streamlit UI.
 
+## Frontend MVP
+
+The repository now also includes a React and TypeScript frontend MVP in `frontend/`.
+
+Core routes:
+- `/review` — review queue with stats, sortable table, event detail, bounded edit form, and approve or reject or publish actions
+- `/timeline` — ECharts timeline with range and review-state filters
+
+Run locally:
+
+```bash
+just api
+cd frontend
+npm install
+npm run dev
+```
+
+Quality commands:
+
+```bash
+cd frontend
+npm run lint
+npm run typecheck
+npm run build
+npm run test
+npm run test:e2e
+npm run build-storybook
+```
+
+The browser smoke suite starts a seeded FastAPI backend automatically for deterministic review and timeline scenarios.
+
 ## Testing & Quality
 
 ```bash
@@ -182,13 +214,13 @@ Tooling:
 - Type checking: mypy
 - Tests: pytest
 
-## Streamlit UI
+## Legacy Python UI
 
 ```bash
-streamlit run app.py
+python scripts/run_dash.py
 ```
 
-Default URL: `http://127.0.0.1:8501`
+Dash remains available for comparison and fallback. The new MVP frontend is the preferred interactive UI for review and timeline workflows.
 
 ## Operations & Reference Docs
 

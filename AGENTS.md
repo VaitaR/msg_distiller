@@ -12,7 +12,7 @@ Slack Event Manager is a **multi-source** event extraction and review system:
 
 It ingests messages, builds scored candidates, extracts structured events with LLM, deduplicates, supports human review/edit workflow, and publishes events to a timeline and API.
 
-**Tech stack**: Python 3.12, uv, ruff, pytest, structlog, FastAPI, Dash+Plotly, Pydantic v2, OpenTelemetry, SQLite/PostgreSQL.
+**Tech stack**: Python 3.12, uv, ruff, pytest, structlog, FastAPI, Dash+Plotly, React+TypeScript+Vite, Tailwind, Pydantic v2, OpenTelemetry, SQLite/PostgreSQL.
 
 ## Architecture Snapshot
 
@@ -24,8 +24,9 @@ It ingests messages, builds scored candidates, extracts structured events with L
 4. **`src/adapters`** — DB repos, clients, LLM (implements protocols)
 5. **`src/api`** — FastAPI backend (events CRUD, timeline, review)
 6. **`src/presentation/dash_app`** — Dash UI (reads only via API)
-7. **`src/workers`** — Queue worker runtime
-8. **`src/observability`** — Metrics and tracing
+7. **`frontend`** — React MVP frontend (review queue + timeline)
+8. **`src/workers`** — Queue worker runtime
+9. **`src/observability`** — Metrics and tracing
 
 ### Domain & Source Model
 - `MessageSource` enum: `slack`, `telegram` (`src/domain/models.py`)
@@ -53,6 +54,13 @@ It ingests messages, builds scored candidates, extracts structured events with L
 - Review queue, timeline views, callbacks
 - Run: `python scripts/run_dash.py` or `just dash`
 
+### Frontend MVP
+- React app: `frontend/`
+- Review queue and timeline are backed by FastAPI only
+- Run: `cd frontend && npm run dev`
+- Build: `cd frontend && npm run build`
+- Browser smoke: `cd frontend && npm run test:e2e`
+
 ### Orchestration
 - Multi-source runner: `scripts/run_multi_source_pipeline.py`
 - Queue-based workers: ingest / extraction / llm / dedup scripts
@@ -65,6 +73,7 @@ It ingests messages, builds scored candidates, extracts structured events with L
 just sync            # Install deps
 just api             # Start API server (port 8000)
 just dash            # Start Dash UI (port 8050)
+cd frontend && npm run dev   # Start React frontend (port 5173)
 ```
 
 ### Pipeline execution
@@ -142,6 +151,8 @@ Tooling in use:
 - mypy (type checks)
 - pytest
 - Playwright (e2e, chromium)
+- Vitest (frontend unit/component tests)
+- Storybook (frontend component states)
 - pre-commit
 
 ## Configuration Truths
@@ -194,6 +205,8 @@ docker compose up -d
 - Keep Slack+Telegram behavior explicit in tests
 - Do not reintroduce obsolete `config.yaml` references
 - Keep docs links valid and local-file backed
+- Frontend API calls belong in `frontend/src/features/**/api.ts` or shared `frontend/src/lib/api/client.ts`, not inline in components
+- For browser smoke checks of the React frontend, use `frontend/e2e/run_seeded_api_server.py` instead of mocking the main backend flows
 
 ## Known Legacy/Compatibility Notes
 

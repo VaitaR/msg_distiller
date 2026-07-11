@@ -1,0 +1,103 @@
+[
+  {
+    "finding_id": "AUD-001",
+    "title": "Public mutation endpoints are exposed without any authentication or origin restriction",
+    "severity": "high",
+    "category": "security",
+    "affected_files": [
+      "src/api/app.py",
+      "src/api/routes_events.py",
+      "scripts/run_api_server.py"
+    ],
+    "evidence": [
+      "src/api/app.py:34-40 configures CORSMiddleware with allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*'].",
+      "src/api/routes_events.py:165-225 exposes POST /{event_id}/review, POST /{event_id}/unmerge, and PATCH /{event_id} with only repository/use-case dependencies; there is no auth dependency or permission check on any mutating route.",
+      "scripts/run_api_server.py:20-29 binds the API to 0.0.0.0 by default, so the unauthenticated mutation surface is network-reachable unless the caller overrides --host.",
+      "Local reproduction: a bare TestClient request with no auth headers successfully mutated state through PATCH and changed an event from needs_review to published."
+    ],
+    "why_it_matters": "Any process or browser that can reach the API can approve, publish, unmerge, or edit events. Combined with wildcard CORS and a 0.0.0.0 default bind, this turns an internal review workflow into an unauthenticated write API.",
+    "recommended_fix": "Require authentication and role checks on all mutating routes, default the local runner to 127.0.0.1, and replace wildcard CORS with an explicit allowlist taken from configuration.",
+    "test_or_validation_needed": "Add API tests that unauthenticated requests to review, unmerge, and patch return 401/403, plus a configuration test covering allowed origins and default bind host.",
+    "confidence": "high"
+  },
+  {
+    "finding_id": "AUD-002",
+    "title": "PATCH endpoint accepts arbitrary fields, bypasses the review workflow, and builds SQL from unvalidated keys",
+    "severity": "critical",
+    "category": "data-integrity",
+    "affected_files": [
+      "src/api/schemas.py",
+      "src/api/routes_events.py",
+      "src/use_cases/review_events.py",
+      "src/adapters/sqlite_repository.py"
+    ],
+    "evidence": [
+      "src/api/schemas.py:182-187 defines EventPatch.updates as dict[str, Any] with no field allowlist.",
+      "src/api/routes_events.py:212-220 forwards body.updates directly into uc.edit_event(...).",
+      "src/use_cases/review_events.py:161-199 diffs and forwards every supplied field without validating whether it is mutable or workflow-safe.",
+      "src/adapters/sqlite_repository.py:2248-2267 interpolates each client-supplied key into SQL via set_parts.append(f\"{key} = ?\").",
+      "Local reproduction 1: PATCH /api/v1/events/{id} with {'updates': {'review_status': 'published'}} returned 200 and changed the event from needs_review to published, bypassing POST /review entirely.",
+      "Local reproduction 2: PATCH /api/v1/events/{id} with {'updates': {'not_a_real_column': 'x'}} returned 500 Internal Server Error, proving the dynamic SQL path is reachable with arbitrary keys."
+    ],
+    "why_it_matters": "A caller can mutate system-managed fields such as review_status, origin, reviewed_by, or version outside the intended workflow, and malformed keys can crash the endpoint. This is both an authorization bypass and an input-to-SQL construction flaw.",
+    "recommended_fix": "Replace the free-form patch payload with a typed allowlist of editable fields, validate each field before it reaches the repository, and map allowed API fields to hard-coded column names instead of interpolating request keys into SQL.",
+    "test_or_validation_needed": "Add negative tests proving PATCH cannot modify review_status/origin/version and returns 422 for unknown fields; add a regression test that malformed keys no longer reach SQL execution.",
+    "confidence": "high"
+  },
+  {
+    "finding_id": "AUD-003",
+    "title": "The events list endpoint returns page length as total, breaking pagination semantics",
+    "severity": "medium",
+    "category": "api-contract",
+    "affected_files": [
+      "src/api/routes_events.py",
+      "tests/api/test_events_api.py"
+    ],
+    "evidence": [
+      "src/api/routes_events.py:92-99 sets total=len(events) and leaves a TODO about a separate count query.",
+      "Local reproduction against a seeded 15-event database: GET /api/v1/events?limit=1&offset=0 returned total=1 instead of the true total count 15.",
+      "tests/api/test_events_api.py only asserts total when limit is large enough to fetch the whole dataset, so the pagination bug is not covered."
+    ],
+    "why_it_matters": "Clients cannot implement correct pagination, page counts, or result summaries if total collapses to the current page size. The current frontend can silently misreport result counts as soon as it starts using smaller pages.",
+    "recommended_fix": "Add a repository count query that uses the same filters as the list query and return that value in EventListResponse.total.",
+    "test_or_validation_needed": "Add an API test that seeds more than one event, requests limit=1, and asserts total reflects the full filtered count rather than the page length.",
+    "confidence": "high"
+  },
+  {
+    "finding_id": "AUD-004",
+    "title": "CI never runs the frontend quality gates that the repository now depends on",
+    "severity": "medium",
+    "category": "ci-validation-gap",
+    "affected_files": [
+      ".github/workflows/ci.yml",
+      "frontend/package.json"
+    ],
+    "evidence": [
+      ".github/workflows/ci.yml:1-97 defines only Python lint, typecheck, and pytest jobs.",
+      "frontend/package.json:6-17 defines frontend scripts for typecheck, build, lint, unit tests, Playwright e2e, and Storybook build.",
+      "There is no workflow job invoking npm install, npm run typecheck, npm run build, npm run lint, npm run test, or any Playwright frontend check."
+    ],
+    "why_it_matters": "Frontend regressions can merge even when the repository advertises a React frontend as part of the supported product surface. Type errors, broken bundles, or failing browser flows are currently invisible to CI.",
+    "recommended_fix": "Add a dedicated frontend CI job that installs node dependencies and runs at least lint, typecheck, build, and unit tests; add an e2e job or a narrower smoke lane if runtime cost is a concern.",
+    "test_or_validation_needed": "Validate the new workflow on a PR by forcing failures in frontend lint/build and confirming CI blocks the merge.",
+    "confidence": "high"
+  },
+  {
+    "finding_id": "AUD-005",
+    "title": "The Codecov upload step points at coverage.xml, but the test command never generates that file",
+    "severity": "medium",
+    "category": "ci-misconfiguration",
+    "affected_files": [
+      ".github/workflows/ci.yml"
+    ],
+    "evidence": [
+      ".github/workflows/ci.yml:81-97 runs pytest with --cov-report=term-missing --cov-report=html and then uploads file: ./coverage.xml to Codecov.",
+      "Local verification: running the same coverage command on tests/api/test_events_api.py produced coverage_xml_missing, because no --cov-report=xml flag is present.",
+      "The current workflow therefore depends on an artifact path that its own command line does not create."
+    ],
+    "why_it_matters": "Coverage reporting in CI is partially broken: Codecov cannot reliably upload the intended report, so coverage data can disappear or silently degrade even while the job appears healthy.",
+    "recommended_fix": "Either add --cov-report=xml:coverage.xml to the pytest command or remove the explicit coverage.xml upload target and rely only on artifacts you actually generate.",
+    "test_or_validation_needed": "Run the CI workflow once after the change and confirm the Codecov step finds the expected file without warnings.",
+    "confidence": "high"
+  }
+]

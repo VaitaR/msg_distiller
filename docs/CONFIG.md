@@ -32,6 +32,12 @@ Optional PostgreSQL:
 POSTGRES_PASSWORD=...
 ```
 
+Mutating review API routes require an explicit shared token:
+
+```bash
+REVIEW_API_TOKEN=change-me
+```
+
 ## Core Config Files
 
 - `config/main.yaml`: global settings (LLM, database, processing, dedup, digest, logging)
@@ -74,6 +80,24 @@ Run migrations:
 
 ```bash
 alembic upgrade head
+```
+
+## API Runtime
+
+Safe local defaults:
+
+- `API_BIND_HOST=127.0.0.1`
+- explicit browser origins via `api.allowed_origins` in `config/main.yaml`
+
+Example:
+
+```yaml
+api:
+	bind_host: 127.0.0.1
+	allowed_origins:
+		- http://127.0.0.1:5173
+		- http://127.0.0.1:4173
+		- http://127.0.0.1:4174
 ```
 
 ## Validation

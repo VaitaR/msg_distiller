@@ -90,3 +90,7 @@ Thumbs.db
 slack_messages.json
 msg_*.py
 *.session
+
+# Test/tooling artifacts
+coverage.xml
+.playwright-mcp/
