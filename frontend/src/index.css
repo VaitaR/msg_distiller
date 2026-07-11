@@ -1,0 +1,73 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+    --background: 42 43% 97%;
+    --foreground: 210 18% 14%;
+    --card: 0 0% 100%;
+    --card-foreground: 210 18% 14%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 210 18% 14%;
+    --primary: 194 92% 28%;
+    --primary-foreground: 48 100% 98%;
+    --secondary: 198 30% 92%;
+    --secondary-foreground: 205 25% 24%;
+    --muted: 38 26% 92%;
+    --muted-foreground: 210 12% 40%;
+    --accent: 36 100% 69%;
+    --accent-foreground: 210 18% 14%;
+    --destructive: 4 82% 57%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 200 22% 82%;
+    --input: 200 22% 82%;
+    --ring: 194 92% 28%;
+    --radius: 1rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    @apply scroll-smooth;
+  }
+
+  body {
+    @apply min-h-screen bg-[hsl(var(--background))] text-[hsl(var(--foreground))] antialiased;
+    background-image:
+      radial-gradient(circle at top left, rgba(240, 190, 86, 0.22), transparent 30%),
+      radial-gradient(circle at top right, rgba(27, 121, 139, 0.18), transparent 24%),
+      linear-gradient(180deg, rgba(255, 250, 242, 0.96), rgba(248, 245, 238, 1));
+    font-family:
+      'IBM Plex Sans', 'Avenir Next', 'Segoe UI', sans-serif;
+  }
+
+  #root {
+    @apply min-h-screen;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family:
+      'Space Grotesk', 'Avenir Next Condensed', 'Segoe UI', sans-serif;
+    @apply tracking-tight text-[hsl(var(--foreground))];
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))] focus-visible:ring-offset-2 focus-visible:ring-offset-[hsl(var(--background))];
+  }
+}
+
+@layer utilities {
+  .glass-card {
+    @apply rounded-[28px] border border-white/60 bg-white/75 shadow-[0_20px_60px_rgba(22,44,58,0.08)] backdrop-blur;
+  }
+}
