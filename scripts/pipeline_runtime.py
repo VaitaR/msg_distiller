@@ -90,7 +90,7 @@ def run_worker_loop(
         iteration += 1
         try:
             processed = worker.process_available_tasks()
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("worker_iteration_failed", iteration=iteration)
             if run_once:
                 raise
@@ -124,7 +124,7 @@ def run_scheduler_loop(
         iteration += 1
         try:
             action()
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("scheduler_iteration_failed", iteration=iteration)
             if run_once:
                 raise

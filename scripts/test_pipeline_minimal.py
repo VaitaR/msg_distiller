@@ -15,6 +15,9 @@ def log(msg: str) -> None:
     sys.stdout.flush()
 
 
+import builtins
+import contextlib
+
 from src.adapters.llm_client import LLMClient
 from src.adapters.repository_factory import create_repository
 from src.adapters.slack_client import SlackClient
@@ -154,10 +157,8 @@ def main() -> bool:
             close_method = getattr(repository, "close", None)
             if callable(close_method):
                 close_method()
-        try:
+        with contextlib.suppress(builtins.BaseException):
             os.unlink(temp_db.name)
-        except:
-            pass
 
 
 if __name__ == "__main__":

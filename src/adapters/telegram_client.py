@@ -403,7 +403,7 @@ class TelegramClient:
                         channel_id=channel_id,
                         wait_seconds=wait_seconds,
                     )
-                    raise RateLimitError(retry_after=wait_seconds)
+                    raise RateLimitError(retry_after=wait_seconds) from error
                 await asyncio.sleep(wait_seconds)
                 continue
             except Exception as exc:  # pragma: no cover - defensive logging
@@ -489,7 +489,7 @@ class TelegramClient:
                     # Only MessageEntityUrl available
                     if isinstance(entity, MessageEntityUrl):
                         entities_list.append(entity)
-                elif MessageEntityTextUrl is not None:
+                elif MessageEntityTextUrl is not None:  # noqa: SIM102  # parallel to branches above
                     # Only MessageEntityTextUrl available
                     if isinstance(entity, MessageEntityTextUrl):
                         entities_list.append(entity)

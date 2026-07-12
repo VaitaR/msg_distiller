@@ -20,17 +20,14 @@ def resolve_task_queue(repository: RepositoryProtocol) -> TaskQueuePort:
 
     provider_raw = getattr(repository, "task_queue", None)
     provider: Callable[[], TaskQueuePort] | None
-    if callable(provider_raw):
-        provider = provider_raw
-    else:
-        provider = None
+    provider = provider_raw if callable(provider_raw) else None
 
     if provider is None:
         msg = "Repository does not expose a task_queue method"
         raise TaskQueueUnavailableError(msg)
 
     try:
-        queue = provider()
+        queue: TaskQueuePort = provider()
     except NotImplementedError as exc:  # pragma: no cover - defensive branch
         logger.error("task_queue_not_supported", repository=type(repository).__name__)
         raise TaskQueueUnavailableError(

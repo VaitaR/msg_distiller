@@ -64,7 +64,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         slack_client = SlackClient(bot_token=_extract_secret(settings.slack_bot_token))
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception("slack_client_initialization_failed")
         return 1
 

@@ -369,7 +369,6 @@ class ReviewEventsUseCase:
 
         return True, restored_ids
 
-
     def _write_audit(
         self,
         event: Event,

@@ -183,9 +183,8 @@ class SlackClient(BaseSlackClient):
         total_cached = 0
 
         while True:
-            cursor_value = cursor
 
-            def _fetch_users_list() -> Any:
+            def _fetch_users_list(cursor_value: str | None = cursor) -> Any:
                 return self.client.users_list(
                     cursor=cursor_value, limit=USERS_PREFETCH_PAGE_SIZE
                 )

@@ -168,9 +168,7 @@ class ObjectRegistry:
             raise ValueError("object_id and synonym must be non-empty")
 
         self._reload_if_changed()
-        if synonym.lower() in (
-            s.lower() for s in self.objects.get(object_id, [])
-        ):
+        if synonym.lower() in (s.lower() for s in self.objects.get(object_id, [])):
             return  # Already registered
 
         original = (

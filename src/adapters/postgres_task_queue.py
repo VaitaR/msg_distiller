@@ -134,10 +134,9 @@ class PostgresTaskQueue(TaskQueuePort):
 
     def complete(self, task_id: UUID) -> None:
         now = datetime.now(tz=UTC)
-        with self._connection_provider() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
+        with self._connection_provider() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
                     UPDATE pipeline_tasks
                     SET status = %s,
                         last_error = NULL,
@@ -145,12 +144,12 @@ class PostgresTaskQueue(TaskQueuePort):
                         updated_at = %s
                     WHERE task_id = %s
                     """,
-                    (TaskStatus.DONE.value, now, task_id),
-                )
-                if cur.rowcount == 0:
-                    conn.rollback()
-                    raise RepositoryError(f"Task not found: {task_id}")
-                conn.commit()
+                (TaskStatus.DONE.value, now, task_id),
+            )
+            if cur.rowcount == 0:
+                conn.rollback()
+                raise RepositoryError(f"Task not found: {task_id}")
+            conn.commit()
 
     def fail(self, task_id: UUID, *, error: str, retry_at: datetime | None) -> None:
         retry_at_utc = _ensure_optional_utc(retry_at)

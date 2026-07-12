@@ -63,9 +63,7 @@ def _event_time(event: Event) -> datetime:
     )
 
 
-def _is_mergeable(
-    event: Event, neighbor: Event, *, date_window_hours: int
-) -> bool:
+def _is_mergeable(event: Event, neighbor: Event, *, date_window_hours: int) -> bool:
     """Compatibility gate for auto-merge (beyond the similarity threshold)."""
     if event.action != neighbor.action:
         return False
@@ -109,9 +107,7 @@ def semantic_dedup_use_case(
         )
     )
     active_events = [
-        e
-        for e in recent_events
-        if e.review_status != ReviewLifecycleStatus.ARCHIVED
+        e for e in recent_events if e.review_status != ReviewLifecycleStatus.ARCHIVED
     ]
     if not active_events:
         return stats

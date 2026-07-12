@@ -3,6 +3,7 @@
 Uses LLM to extract structured events from candidate messages.
 """
 
+import contextlib
 import hashlib
 import json
 import re
@@ -358,10 +359,8 @@ def convert_llm_event_to_domain(
 
     severity = None
     if llm_event.severity:
-        try:
+        with contextlib.suppress(ValueError):
             severity = Severity(llm_event.severity)
-        except ValueError:
-            pass
 
     try:
         time_source = TimeSource(llm_event.time_source)
@@ -1345,9 +1344,13 @@ def extract_events_use_case(
                     if event_message_count
                     else 0.0,
                     future_like_events=future_like_events,
-                    pct_future_like=round((future_like_events / events_extracted) * 100, 2),
+                    pct_future_like=round(
+                        (future_like_events / events_extracted) * 100, 2
+                    ),
                     other_action_events=other_action_events,
-                    pct_action_other=round((other_action_events / events_extracted) * 100, 2),
+                    pct_action_other=round(
+                        (other_action_events / events_extracted) * 100, 2
+                    ),
                     low_utility_summaries=low_utility_summaries,
                     pct_low_utility=round(
                         (low_utility_summaries / events_extracted) * 100, 2
@@ -1360,10 +1363,7 @@ def extract_events_use_case(
                     summary_contract_reject_missing_scope=summary_contract_reject_missing_scope,
                     summary_contract_soft_accept_missing_effect=summary_contract_soft_accept_missing_effect,
                     summary_contract_soft_accept_rate=round(
-                        (
-                            summary_contract_soft_accept_missing_effect
-                            / events_extracted
-                        )
+                        (summary_contract_soft_accept_missing_effect / events_extracted)
                         * 100,
                         2,
                     ),

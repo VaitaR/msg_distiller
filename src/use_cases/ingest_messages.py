@@ -9,7 +9,7 @@ import hashlib
 import os
 import sqlite3
 from collections.abc import Iterator
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import AbstractContextManager, contextmanager, suppress
 from datetime import datetime, timedelta
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, Final
@@ -575,20 +575,16 @@ def ingest_messages_use_case(
                         user_info = None
                         user_id = raw_msg.get("user")
                         if user_id and not raw_msg.get("bot_id"):
-                            try:
+                            with suppress(Exception):
                                 user_info = slack_client.get_user_info(user_id)
-                            except Exception:
-                                pass
 
                         permalink = None
                         msg_ts = raw_msg.get("ts")
                         if msg_ts:
-                            try:
+                            with suppress(Exception):
                                 permalink = slack_client.get_permalink(
                                     channel_id, msg_ts
                                 )
-                            except Exception:
-                                pass
 
                         processed_msg = process_slack_message(
                             raw_msg,

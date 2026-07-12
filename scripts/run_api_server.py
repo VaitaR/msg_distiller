@@ -13,10 +13,10 @@ from pathlib import Path
 # Ensure project root is on sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import uvicorn  # noqa: E402
+import uvicorn
 
-from src.api.app import create_app  # noqa: E402
-from src.config.settings import get_settings  # noqa: E402
+from src.api.app import create_app
+from src.config.settings import get_settings
 
 
 def main() -> None:

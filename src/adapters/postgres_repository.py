@@ -247,15 +247,17 @@ class PostgresRepository:
                 )
 
             usage_ratio = self._pool_in_use_count / self._pool_max_connections
-            if usage_ratio >= self._pool_usage_warning_threshold:
-                if not self._pool_usage_warning_emitted:
-                    self._pool_usage_warning_emitted = True
-                    logger.warning(
-                        "postgres_pool_usage_high",
-                        in_use=self._pool_in_use_count,
-                        max_connections=self._pool_max_connections,
-                        threshold=self._pool_usage_warning_threshold,
-                    )
+            if (
+                usage_ratio >= self._pool_usage_warning_threshold
+                and not self._pool_usage_warning_emitted
+            ):
+                self._pool_usage_warning_emitted = True
+                logger.warning(
+                    "postgres_pool_usage_high",
+                    in_use=self._pool_in_use_count,
+                    max_connections=self._pool_max_connections,
+                    threshold=self._pool_usage_warning_threshold,
+                )
 
     def _register_connection_checkin(self) -> None:
         """Update pool usage counters after a checkin."""
@@ -779,11 +781,10 @@ class PostgresRepository:
         if not candidates:
             return 0
 
-        with self._get_connection() as conn:
-            with conn.cursor() as cur:
-                for cand in candidates:
-                    cur.execute(
-                        """
+        with self._get_connection() as conn, conn.cursor() as cur:
+            for cand in candidates:
+                cur.execute(
+                    """
                         INSERT INTO event_candidates (
                             message_id, channel, ts_dt, text_norm, links_norm,
                             anchors, score, status, features_json, source_id,
@@ -803,23 +804,23 @@ class PostgresRepository:
                             processing_started_at = EXCLUDED.processing_started_at,
                             lease_attempts = EXCLUDED.lease_attempts
                         """,
-                        (
-                            cand.message_id,
-                            cand.channel,
-                            cand.ts_dt,
-                            cand.text_norm,
-                            json.dumps(cand.links_norm),
-                            json.dumps(cand.anchors),
-                            cand.score,
-                            cand.status.value,
-                            json.dumps(cand.features.model_dump()),
-                            cand.source_id.value,
-                            cand.thread_ts,
-                            cand.processing_started_at,
-                            cand.lease_attempts,
-                        ),
-                    )
-                conn.commit()
+                    (
+                        cand.message_id,
+                        cand.channel,
+                        cand.ts_dt,
+                        cand.text_norm,
+                        json.dumps(cand.links_norm),
+                        json.dumps(cand.anchors),
+                        cand.score,
+                        cand.status.value,
+                        json.dumps(cand.features.model_dump()),
+                        cand.source_id.value,
+                        cand.thread_ts,
+                        cand.processing_started_at,
+                        cand.lease_attempts,
+                    ),
+                )
+            conn.commit()
         return len(candidates)
 
     def get_candidates_for_extraction(
@@ -1053,29 +1054,28 @@ class PostgresRepository:
         Raises:
             RepositoryError: On storage errors
         """
-        with self._get_connection() as conn:
-            with conn.cursor() as cur:
-                if status == CandidateStatus.PROCESSING.value:
-                    cur.execute(
-                        """
+        with self._get_connection() as conn, conn.cursor() as cur:
+            if status == CandidateStatus.PROCESSING.value:
+                cur.execute(
+                    """
                         UPDATE event_candidates
                         SET status = %s,
                             processing_started_at = %s,
                             lease_attempts = COALESCE(lease_attempts, 0) + 1
                         WHERE message_id = %s
                         """,
-                        (status, datetime.now(tz=pytz.UTC), message_id),
-                    )
-                else:
-                    cur.execute(
-                        """
+                    (status, datetime.now(tz=pytz.UTC), message_id),
+                )
+            else:
+                cur.execute(
+                    """
                         UPDATE event_candidates
                         SET status = %s, processing_started_at = NULL
                         WHERE message_id = %s
                         """,
-                        (status, message_id),
-                    )
-                conn.commit()
+                    (status, message_id),
+                )
+            conn.commit()
 
     def save_events(self, events: list[Event]) -> int:
         """Save events with versioning (upsert by dedup_key)."""
@@ -1244,18 +1244,17 @@ class PostgresRepository:
         Raises:
             RepositoryError: On storage errors
         """
-        with self._get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
+        with self._get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
                     SELECT COALESCE(SUM(cost_usd), 0.0) as total
                     FROM llm_calls
                     WHERE DATE(created_at) = DATE(%s)
                     """,
-                    (date,),
-                )
-                row = cur.fetchone()
-                return float(row[0]) if row else 0.0
+                (date,),
+            )
+            row = cur.fetchone()
+            return float(row[0]) if row else 0.0
 
     def get_cached_llm_response(
         self, prompt_hash: str, *, max_age: timedelta | None = None
@@ -1272,54 +1271,52 @@ class PostgresRepository:
         Raises:
             RepositoryError: On storage errors
         """
-        with self._get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
+        with self._get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
                     SELECT response_json, created_at
                     FROM llm_calls
                     WHERE prompt_hash = %s AND response_json IS NOT NULL
                     ORDER BY created_at DESC
                     LIMIT 1
                     """,
-                    (prompt_hash,),
-                )
-                row = cast("tuple[str, datetime | None] | None", cur.fetchone())
-                if not row:
+                (prompt_hash,),
+            )
+            row = cast("tuple[str, datetime | None] | None", cur.fetchone())
+            if not row:
+                return None
+
+            response_json, created_at = row
+
+            if max_age is not None:
+                if created_at is None:
+                    logger.warning(
+                        "llm_cache_missing_timestamp",
+                        prompt_hash=prompt_hash[:12],
+                    )
+                    self.invalidate_llm_cache_entry(prompt_hash)
                     return None
 
-                response_json, created_at = row
+                if created_at.tzinfo is None:
+                    created_at = created_at.replace(tzinfo=UTC)
 
-                if max_age is not None:
-                    if created_at is None:
-                        logger.warning(
-                            "llm_cache_missing_timestamp",
-                            prompt_hash=prompt_hash[:12],
-                        )
-                        self.invalidate_llm_cache_entry(prompt_hash)
-                        return None
+                if created_at < datetime.now(tz=UTC) - max_age:
+                    logger.info(
+                        "llm_cache_entry_expired",
+                        prompt_hash=prompt_hash[:12],
+                        cached_at=created_at.isoformat(),
+                    )
+                    self.invalidate_llm_cache_entry(prompt_hash)
+                    return None
 
-                    if created_at.tzinfo is None:
-                        created_at = created_at.replace(tzinfo=UTC)
-
-                    if created_at < datetime.now(tz=UTC) - max_age:
-                        logger.info(
-                            "llm_cache_entry_expired",
-                            prompt_hash=prompt_hash[:12],
-                            cached_at=created_at.isoformat(),
-                        )
-                        self.invalidate_llm_cache_entry(prompt_hash)
-                        return None
-
-                return response_json
+            return response_json
 
     def save_llm_response(self, prompt_hash: str, response_json: str) -> None:
         """Persist structured LLM response for caching reuse."""
 
-        with self._get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
+        with self._get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
                     UPDATE llm_calls
                     SET response_json = %s
                     WHERE call_id = (
@@ -1330,24 +1327,23 @@ class PostgresRepository:
                         LIMIT 1
                     )
                     """,
-                    (response_json, prompt_hash),
-                )
-                conn.commit()
+                (response_json, prompt_hash),
+            )
+            conn.commit()
 
     def invalidate_llm_cache_entry(self, prompt_hash: str) -> None:
         """Clear cached payload without removing call records."""
 
-        with self._get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
+        with self._get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
                     UPDATE llm_calls
                     SET response_json = NULL
                     WHERE prompt_hash = %s
                 """,
-                    (prompt_hash,),
-                )
-                conn.commit()
+                (prompt_hash,),
+            )
+            conn.commit()
 
     def get_last_processed_ts(
         self, channel: str, source_id: MessageSource | None = None
@@ -1869,9 +1865,7 @@ class PostgresRepository:
                     )
                 conn.commit()
         except PsycopgError as exc:
-            raise RepositoryError(
-                f"Failed to record object suggestion: {exc}"
-            ) from exc
+            raise RepositoryError(f"Failed to record object suggestion: {exc}") from exc
 
     def list_object_suggestions(self, status: str = "pending") -> list[dict[str, Any]]:
         """List object suggestions with the given status, most frequent first."""
@@ -1891,9 +1885,7 @@ class PostgresRepository:
                     )
                     return [dict(row) for row in cur.fetchall()]
         except PsycopgError as exc:
-            raise RepositoryError(
-                f"Failed to list object suggestions: {exc}"
-            ) from exc
+            raise RepositoryError(f"Failed to list object suggestions: {exc}") from exc
 
     def resolve_object_suggestion(
         self,
@@ -1913,7 +1905,7 @@ class PostgresRepository:
                         """,
                         (status, object_id, suggestion_id),
                     )
-                    updated = cur.rowcount > 0
+                    updated: bool = cur.rowcount > 0
                 conn.commit()
                 return updated
         except PsycopgError as exc:
@@ -1939,7 +1931,7 @@ class PostgresRepository:
                         """,
                         (review_status.value, reviewed_by, event_id),
                     )
-                    updated = cur.rowcount > 0
+                    updated: bool = cur.rowcount > 0
                 conn.commit()
                 return updated
         except PsycopgError as exc:

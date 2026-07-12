@@ -79,14 +79,21 @@ ignore = [
     "E501",    # длина строки форматтером
     "PLC0415", # Локальные импорты нужны для избежания циклических зависимостей
     "PLR0911", "PLR0912", "PLR0913", "PLR0915",
+    "RUF001", "RUF002", "RUF003",  # кириллица/символы в русскоязычном коде — не путаница
+    "UP040", "UP046",  # PEP 695 не поддерживается установленным mypy — держим Generic[T]/TypeAlias
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
-"tests/*.py" = ["PLR2004"]
+"tests/*.py" = ["PLR2004", "PT019"]
 "src/use_cases/*.py" = ["PLR2004"]
-"scripts/*.py" = ["E402", "E722", "PLR2004"]
-"src/adapters/postgres_repository.py" = ["N812"]
+# dev/diagnostic scripts: short-lived, resource cleanup at process exit is fine
+"scripts/*.py" = ["E402", "E722", "PLR2004", "SIM115"]
+# SIM117: psycopg2 `with conn` (txn) + `with cursor` nesting is intentional/idiomatic
+"src/adapters/postgres_repository.py" = ["N812", "SIM117"]
+"src/adapters/postgres_task_queue.py" = ["SIM117"]
+# sqlite3.Row: `x in row` tests VALUES not keys, so `x in row.keys()` is required
+"src/adapters/sqlite_repository.py" = ["SIM118"]
 "src/api/*.py" = ["B008"]  # FastAPI Depends/Query in defaults is idiomatic
 "alembic/env.py" = ["E402"]
 
@@ -125,6 +132,7 @@ module = [
     "dash_bootstrap_components.*",
     "opentelemetry.*",
     "plotly.*",
+    "pandas.*",
 ]
 ignore_missing_imports = true
 

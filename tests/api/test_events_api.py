@@ -114,9 +114,7 @@ class TestEventsWithSeedData:
         assert response.status_code == 200
         data = response.json()
         assert data["total"] == SEED_COUNTS["needs_review"]
-        assert all(
-            item["review_status"] == "needs_review" for item in data["items"]
-        )
+        assert all(item["review_status"] == "needs_review" for item in data["items"])
 
     def test_list_events_filter_published(self, seeded_api_client: Any) -> None:
         response = seeded_api_client.get(
@@ -162,9 +160,7 @@ class TestEventsWithSeedData:
         assert "category" in entry
         assert "review_status" in entry
 
-    def test_get_event_by_id_returns_full_fields(
-        self, seeded_api_client: Any
-    ) -> None:
+    def test_get_event_by_id_returns_full_fields(self, seeded_api_client: Any) -> None:
         event_id = NEEDS_REVIEW_IDS[0]
         response = seeded_api_client.get(f"/api/v1/events/{event_id}")
         assert response.status_code == 200
@@ -356,6 +352,8 @@ class TestMutationSecurity:
         )
 
         assert response.status_code == 200
-        assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:5173"
+        assert (
+            response.headers["access-control-allow-origin"] == "http://127.0.0.1:5173"
+        )
         assert response.headers["access-control-allow-credentials"] == "true"
         assert response.headers["access-control-allow-origin"] != "*"

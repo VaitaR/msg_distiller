@@ -214,14 +214,14 @@ class SlackClient:
                     time.sleep(retry_after)
                     attempt += 1
                     if attempt >= self._max_retries:
-                        raise RateLimitError(retry_after=retry_after)
+                        raise RateLimitError(retry_after=retry_after) from error
                     continue
 
                 attempt += 1
                 if attempt >= self._max_retries:
                     raise SlackAPIError(
                         f"Failed after {self._max_retries} retries: {error}"
-                    )
+                    ) from error
 
                 backoff_seconds = 2**attempt
                 logger.warning(
@@ -253,7 +253,7 @@ class SlackClient:
         try:
             return self._get_user_info_cached(user_id)
         except SlackApiError as e:
-            raise SlackAPIError(f"Failed to fetch user info: {e}")
+            raise SlackAPIError(f"Failed to fetch user info: {e}") from e
 
     def post_message(
         self, channel_id: str, blocks: list[dict[str, Any]], text: str = ""
@@ -284,9 +284,9 @@ class SlackClient:
         except SlackApiError as e:
             if e.response.get("error") == "ratelimited":
                 retry_after = int(e.response.headers.get("Retry-After", 60))
-                raise RateLimitError(retry_after=retry_after)
+                raise RateLimitError(retry_after=retry_after) from e
 
-            raise SlackAPIError(f"Failed to post message: {e}")
+            raise SlackAPIError(f"Failed to post message: {e}") from e
 
     def get_permalink(self, channel_id: str, message_ts: str) -> str | None:
         """Get permalink for a message.
@@ -303,7 +303,7 @@ class SlackClient:
         except SlackApiError:
             return None
 
-    @lru_cache(maxsize=1024)
+    @lru_cache(maxsize=1024)  # noqa: B019  # long-lived client; per-instance cache is intended
     def _get_user_info_cached(self, user_id: str) -> dict[str, Any]:
         response = self.client.users_info(user=user_id)
 
@@ -312,7 +312,7 @@ class SlackClient:
 
         return response["user"]
 
-    @lru_cache(maxsize=4096)
+    @lru_cache(maxsize=4096)  # noqa: B019  # long-lived client; per-instance cache is intended
     def _get_permalink_cached(self, channel_id: str, message_ts: str) -> str | None:
         response = self.client.chat_getPermalink(
             channel=channel_id, message_ts=message_ts

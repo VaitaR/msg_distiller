@@ -140,11 +140,13 @@ class EventValidator:
         elif event.status == EventStatus.STARTED:
             if not event.actual_start:
                 errors.append("Status 'started' requires actual_start timestamp")
-        elif event.status in (EventStatus.PLANNED, EventStatus.CONFIRMED):
-            if not event.planned_start:
-                errors.append(
-                    f"Status '{event.status.value}' requires planned_start timestamp"
-                )
+        elif (
+            event.status in (EventStatus.PLANNED, EventStatus.CONFIRMED)
+            and not event.planned_start
+        ):
+            errors.append(
+                f"Status '{event.status.value}' requires planned_start timestamp"
+            )
 
         # Links validation
         if len(event.links) > MAX_LINKS:

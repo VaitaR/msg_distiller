@@ -145,14 +145,14 @@ def render_filters(df: pd.DataFrame, key_prefix: str) -> pd.DataFrame:
 
     with col1:
         # Category filter
-        categories = ["All"] + sorted(df["category"].unique().tolist())
+        categories = ["All", *sorted(df["category"].unique().tolist())]
         selected_category = st.selectbox(
             "📂 Category", options=categories, key=f"{key_prefix}_category"
         )
 
     with col2:
         # Status filter
-        statuses = ["All"] + sorted(df["status"].unique().tolist())
+        statuses = ["All", *sorted(df["status"].unique().tolist())]
         selected_status = st.selectbox(
             "📊 Status", options=statuses, key=f"{key_prefix}_status"
         )
@@ -417,10 +417,16 @@ def render_timeline(df: pd.DataFrame, key_prefix: str) -> None:
         xaxis_title="",
         yaxis_title="",
         showlegend=True,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        legend={
+            "orientation": "h",
+            "yanchor": "bottom",
+            "y": 1.02,
+            "xanchor": "left",
+            "x": 0,
+        },
     )
 
-    fig.update_yaxes(automargin=True, tickfont=dict(size=11))
+    fig.update_yaxes(automargin=True, tickfont={"size": 11})
 
     st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_timeline")
 
@@ -678,9 +684,9 @@ def render_category_chart(df: pd.DataFrame, key_prefix: str) -> None:
 
     fig.update_layout(
         height=300,
-        margin=dict(l=20, r=20, t=40, b=20),
+        margin={"l": 20, "r": 20, "t": 40, "b": 20},
         showlegend=True,
-        legend=dict(orientation="h", yanchor="bottom", y=-0.2),
+        legend={"orientation": "h", "yanchor": "bottom", "y": -0.2},
     )
 
     st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_pie")
@@ -705,7 +711,7 @@ def render_status_chart(df: pd.DataFrame, key_prefix: str) -> None:
 
     fig.update_layout(
         height=300,
-        margin=dict(l=20, r=20, t=40, b=20),
+        margin={"l": 20, "r": 20, "t": 40, "b": 20},
         showlegend=False,
         xaxis_title="Count",
         yaxis_title="",

@@ -183,7 +183,9 @@ def test_sqlite_save_event_relation_idempotent(repo: RepositoryProtocol) -> None
 # ---------------------------------------------------------------------------
 
 
-def test_embed_events_batches_and_saves(repo: RepositoryProtocol, settings: Settings) -> None:
+def test_embed_events_batches_and_saves(
+    repo: RepositoryProtocol, settings: Settings
+) -> None:
     events = [_make_event(i) for i in range(1, 4)]
     repo.save_events(events)
 
@@ -206,7 +208,9 @@ def test_embed_events_batches_and_saves(repo: RepositoryProtocol, settings: Sett
     assert repo.get_events_missing_embedding(MODEL) == []
 
 
-def test_embed_events_disabled_is_noop(repo: RepositoryProtocol, settings: Settings) -> None:
+def test_embed_events_disabled_is_noop(
+    repo: RepositoryProtocol, settings: Settings
+) -> None:
     llm_client = MagicMock()
     stats = embed_events_use_case(
         repository=repo,

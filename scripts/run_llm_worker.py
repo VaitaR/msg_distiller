@@ -72,7 +72,7 @@ def main(argv: list[str] | None = None) -> int:
             temperature=settings.llm_temperature,
             timeout=settings.llm_timeout_seconds,
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception("llm_client_initialization_failed")
         return 1
 

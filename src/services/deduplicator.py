@@ -202,10 +202,13 @@ def should_merge_events(
         # different non-overlapping Jira/PR/URL anchors they are likely
         # separate tickets and should NOT be auto-merged.
         # e.g. "loyalty program in Wallet" vs "wallet loyalty program v1.0"
-        raw_sim: float = fuzz.token_set_ratio(
-            event1.object_name_raw.lower().strip(),
-            event2.object_name_raw.lower().strip(),
-        ) / 100.0
+        raw_sim: float = (
+            fuzz.token_set_ratio(
+                event1.object_name_raw.lower().strip(),
+                event2.object_name_raw.lower().strip(),
+            )
+            / 100.0
+        )
         return raw_sim >= SEMANTIC_TITLE_SIMILARITY
     else:
         # One or both events have anchors that don't overlap — likely different
@@ -265,7 +268,9 @@ def merge_events(event1: Event, event2: Event) -> tuple[Event, Event]:
         target_event_id=event2.event_id,
     )
     survivor_relations = [
-        r for r in event1.relations if r.relation_type != RelationType.ABSORBED_FROM
+        r
+        for r in event1.relations
+        if r.relation_type != RelationType.ABSORBED_FROM
         or r.target_event_id != event2.event_id
     ] + [absorbed_relation]
 
@@ -324,11 +329,13 @@ def merge_events(event1: Event, event2: Event) -> tuple[Event, Event]:
         merged = merged.model_copy(update={"dedup_key": refreshed_key})
 
     # Create archived copy of the absorbed event
-    archived_absorbed = event2.model_copy(update={
-        "review_status": ReviewLifecycleStatus.ARCHIVED,
-        "origin": EventOrigin.SYSTEM_MERGE,
-        "version": event2.version + 1,
-    })
+    archived_absorbed = event2.model_copy(
+        update={
+            "review_status": ReviewLifecycleStatus.ARCHIVED,
+            "origin": EventOrigin.SYSTEM_MERGE,
+            "version": event2.version + 1,
+        }
+    )
 
     return merged, archived_absorbed
 

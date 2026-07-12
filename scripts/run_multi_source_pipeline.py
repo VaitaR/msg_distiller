@@ -41,13 +41,13 @@ from src.services.importance_scorer import ImportanceScorer
 from src.use_cases.build_candidates import build_candidates_use_case
 from src.use_cases.deduplicate_events import deduplicate_events_use_case
 from src.use_cases.embed_events import embed_events_use_case
-from src.use_cases.semantic_dedup import semantic_dedup_use_case
 from src.use_cases.extract_events import build_object_registry, extract_events_use_case
 from src.use_cases.ingest_messages import ingest_messages_use_case
 from src.use_cases.ingest_telegram_messages import (
     ingest_telegram_messages_use_case_async,
 )
 from src.use_cases.publish_digest import publish_digest_use_case
+from src.use_cases.semantic_dedup import semantic_dedup_use_case
 
 # Global flag for graceful shutdown
 _shutdown_requested = False
@@ -460,7 +460,7 @@ def run_single_iteration(
                 f"semantic_suspected={semantic_stats['suspected']}"
             )
         except Exception as e:
-            logger.error(f"embed_and_semantic_dedup_failed: {str(e)}", exc_info=True)
+            logger.error(f"embed_and_semantic_dedup_failed: {e!s}", exc_info=True)
 
     # STEP 5: Publish digest (optional, across all sources)
     if args.publish:
@@ -490,7 +490,7 @@ def run_single_iteration(
                 f"dry_run={args.dry_run}"
             )
         except Exception as e:
-            logger.error(f"digest_publishing_failed: {str(e)}", exc_info=True)
+            logger.error(f"digest_publishing_failed: {e!s}", exc_info=True)
 
 
 def main() -> int:

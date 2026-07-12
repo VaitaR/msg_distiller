@@ -65,10 +65,9 @@ def apply_time_completion_policy(
         if event.actual_start is None:
             event.actual_start = effective_ts
             completed_field = "actual_start"
-    elif event.status == EventStatus.COMPLETED:
-        if event.actual_end is None:
-            event.actual_end = effective_ts
-            completed_field = "actual_end"
+    elif event.status == EventStatus.COMPLETED and event.actual_end is None:
+        event.actual_end = effective_ts
+        completed_field = "actual_end"
 
     if completed_field is None:
         return TimeCompletionResult(

@@ -39,7 +39,6 @@ from src.services.deduplicator import (
 )
 from src.use_cases.review_events import ReviewEventsUseCase
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -118,8 +117,12 @@ class TestShouldMergeEventsSemantic:
 
     def test_semantic_merge_blocked_for_different_sources(self) -> None:
         """Cross-source events never merge, even with identical names."""
-        evt1 = _make_event(n=1, object_name="Wallet loyalty program", source_id=MessageSource.SLACK)
-        evt2 = _make_event(n=2, object_name="Wallet loyalty program", source_id=MessageSource.TELEGRAM)
+        evt1 = _make_event(
+            n=1, object_name="Wallet loyalty program", source_id=MessageSource.SLACK
+        )
+        evt2 = _make_event(
+            n=2, object_name="Wallet loyalty program", source_id=MessageSource.TELEGRAM
+        )
         assert should_merge_events(evt1, evt2) is False
 
     def test_semantic_merge_blocked_outside_date_window(self) -> None:
@@ -157,7 +160,9 @@ class TestShouldMergeEventsAnchorPath:
     def test_anchor_path_blocked_for_low_title_similarity(self) -> None:
         """Anchor overlap alone is not enough — titles must also be similar."""
         evt1 = _make_event(n=1, object_name="Auth service down", anchors=["PROJ-999"])
-        evt2 = _make_event(n=2, object_name="Payment rollback completed", anchors=["PROJ-999"])
+        evt2 = _make_event(
+            n=2, object_name="Payment rollback completed", anchors=["PROJ-999"]
+        )
         assert should_merge_events(evt1, evt2) is False
 
 
@@ -195,7 +200,8 @@ class TestMergeEvents:
         evt2 = _make_event(n=2, object_name="Wallet loyalty program v1.0")
         survivor, _absorbed = merge_events(evt1, evt2)
         absorbed_relations = [
-            r for r in survivor.relations
+            r
+            for r in survivor.relations
             if r.relation_type == RelationType.ABSORBED_FROM
         ]
         assert len(absorbed_relations) == 1
@@ -267,13 +273,16 @@ class TestDeduplicateEventList:
         """Total events (survivors + absorbed) equals input count."""
         events = [
             _make_event(n=i, object_name=name)
-            for i, name in enumerate([
-                "loyalty program in Wallet",
-                "wallet loyalty program v1.0",
-                "Telegram Stars payment feature",
-                "payment via Telegram Stars",
-                "database migration PostgreSQL",
-            ], start=1)
+            for i, name in enumerate(
+                [
+                    "loyalty program in Wallet",
+                    "wallet loyalty program v1.0",
+                    "Telegram Stars payment feature",
+                    "payment via Telegram Stars",
+                    "database migration PostgreSQL",
+                ],
+                start=1,
+            )
         ]
         survivors, absorbed = deduplicate_event_list(events)
         assert len(survivors) + len(absorbed) == len(events)
@@ -325,7 +334,9 @@ def merge_scenario(tmp_path: Path) -> tuple[str, str, str]:
 class TestUnmergeIntegration:
     """Integration tests for ReviewEventsUseCase.unmerge_event()."""
 
-    def test_unmerge_restores_absorbed_event(self, merge_scenario: tuple[str, str, str]) -> None:
+    def test_unmerge_restores_absorbed_event(
+        self, merge_scenario: tuple[str, str, str]
+    ) -> None:
         db_path, survivor_id, absorbed_id = merge_scenario
         repo = SQLiteRepository(db_path=db_path)
         uc = ReviewEventsUseCase(repo)
@@ -335,7 +346,9 @@ class TestUnmergeIntegration:
         assert ok is True
         assert absorbed_id in restored
 
-    def test_unmerge_sets_needs_review_on_absorbed(self, merge_scenario: tuple[str, str, str]) -> None:
+    def test_unmerge_sets_needs_review_on_absorbed(
+        self, merge_scenario: tuple[str, str, str]
+    ) -> None:
         db_path, survivor_id, absorbed_id = merge_scenario
         repo = SQLiteRepository(db_path=db_path)
         uc = ReviewEventsUseCase(repo)
@@ -346,7 +359,9 @@ class TestUnmergeIntegration:
         assert restored_event is not None
         assert restored_event.review_status == ReviewLifecycleStatus.NEEDS_REVIEW
 
-    def test_unmerge_deletes_absorbed_from_relation(self, merge_scenario: tuple[str, str, str]) -> None:
+    def test_unmerge_deletes_absorbed_from_relation(
+        self, merge_scenario: tuple[str, str, str]
+    ) -> None:
         db_path, survivor_id, absorbed_id = merge_scenario
         repo = SQLiteRepository(db_path=db_path)
         uc = ReviewEventsUseCase(repo)
@@ -365,7 +380,9 @@ class TestUnmergeIntegration:
         )
         assert len(relations_after) == 0
 
-    def test_unmerge_writes_audit_on_absorbed(self, merge_scenario: tuple[str, str, str]) -> None:
+    def test_unmerge_writes_audit_on_absorbed(
+        self, merge_scenario: tuple[str, str, str]
+    ) -> None:
         db_path, survivor_id, absorbed_id = merge_scenario
         repo = SQLiteRepository(db_path=db_path)
         uc = ReviewEventsUseCase(repo)
@@ -376,7 +393,9 @@ class TestUnmergeIntegration:
         actions = [e.action for e in audit]
         assert "restored_from_merge" in actions
 
-    def test_unmerge_writes_audit_on_survivor(self, merge_scenario: tuple[str, str, str]) -> None:
+    def test_unmerge_writes_audit_on_survivor(
+        self, merge_scenario: tuple[str, str, str]
+    ) -> None:
         db_path, survivor_id, absorbed_id = merge_scenario
         repo = SQLiteRepository(db_path=db_path)
         uc = ReviewEventsUseCase(repo)
@@ -407,7 +426,9 @@ class TestUnmergeIntegration:
         repo = SQLiteRepository(db_path=db_path)
         uc = ReviewEventsUseCase(repo)
 
-        ok, restored = uc.unmerge_event("00000000-0000-0000-0000-000000000000", actor="test")
+        ok, restored = uc.unmerge_event(
+            "00000000-0000-0000-0000-000000000000", actor="test"
+        )
         assert ok is False
         assert restored == []
 
@@ -432,7 +453,9 @@ class TestRepoRelationMethods:
         repo.save_events([survivor])
         return repo
 
-    def test_get_event_relations_returns_absorbed_from(self, repo_with_relations: SQLiteRepository) -> None:
+    def test_get_event_relations_returns_absorbed_from(
+        self, repo_with_relations: SQLiteRepository
+    ) -> None:
         survivor_id = "00000000-0000-0000-0000-000000000001"
         rels = repo_with_relations.get_event_relations(
             survivor_id, relation_type=RelationType.ABSORBED_FROM.value
@@ -442,12 +465,16 @@ class TestRepoRelationMethods:
         assert rel_type == RelationType.ABSORBED_FROM.value
         assert target_id == "00000000-0000-0000-0000-000000000002"
 
-    def test_get_event_relations_no_filter_returns_all(self, repo_with_relations: SQLiteRepository) -> None:
+    def test_get_event_relations_no_filter_returns_all(
+        self, repo_with_relations: SQLiteRepository
+    ) -> None:
         survivor_id = "00000000-0000-0000-0000-000000000001"
         rels = repo_with_relations.get_event_relations(survivor_id)
         assert len(rels) >= 1
 
-    def test_delete_event_relations_removes_correct_rows(self, repo_with_relations: SQLiteRepository) -> None:
+    def test_delete_event_relations_removes_correct_rows(
+        self, repo_with_relations: SQLiteRepository
+    ) -> None:
         survivor_id = "00000000-0000-0000-0000-000000000001"
         deleted = repo_with_relations.delete_event_relations(
             survivor_id, relation_type=RelationType.ABSORBED_FROM.value
@@ -458,7 +485,9 @@ class TestRepoRelationMethods:
         )
         assert len(remaining) == 0
 
-    def test_delete_event_relations_other_types_unaffected(self, repo_with_relations: SQLiteRepository) -> None:
+    def test_delete_event_relations_other_types_unaffected(
+        self, repo_with_relations: SQLiteRepository
+    ) -> None:
         """Deleting ABSORBED_FROM leaves other relation types intact."""
         survivor_id = "00000000-0000-0000-0000-000000000001"
         # Only ABSORBED_FROM exists, so deleting a different type should delete 0

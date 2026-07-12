@@ -1,5 +1,6 @@
 """API integration test fixtures."""
 
+import contextlib
 import os
 from typing import Any
 
@@ -64,10 +65,8 @@ def seeded_api_client(seeded_db: tuple[str, Any]) -> Any:
     get_app_settings.cache_clear()
     get_repo.cache_clear()
 
-    try:
+    with contextlib.suppress(Exception):
         seeded_repo.close()
-    except Exception:
-        pass
 
 
 @pytest.fixture
@@ -96,7 +95,5 @@ def seeded_api_client_no_auth(seeded_db: tuple[str, Any]) -> Any:
     get_app_settings.cache_clear()
     get_repo.cache_clear()
 
-    try:
+    with contextlib.suppress(Exception):
         seeded_repo.close()
-    except Exception:
-        pass

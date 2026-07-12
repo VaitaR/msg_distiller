@@ -4,6 +4,8 @@ Approving a suggestion writes a synonym into the registry YAML (picked up
 by mtime hot-reload) and resolves the suggestion in the database.
 """
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from src.api.dependencies import get_object_registry, get_repo, require_write_access
@@ -74,7 +76,7 @@ def reject_suggestion(
 
 def _get_pending_suggestion(
     repo: RepositoryProtocol, suggestion_id: int
-) -> dict:
+) -> dict[str, Any]:
     for item in repo.list_object_suggestions(status="pending"):
         if item["id"] == suggestion_id:
             return item

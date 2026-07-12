@@ -89,9 +89,7 @@ def test_unmatched_events_recorded_matched_skipped() -> None:
         correlation_id=None,
     )
 
-    repository.record_object_suggestion.assert_called_once_with(
-        "Mystery Box", "id-1"
-    )
+    repository.record_object_suggestion.assert_called_once_with("Mystery Box", "id-1")
 
 
 def test_suggestion_failure_does_not_raise() -> None:
@@ -190,7 +188,10 @@ def test_registry_hot_reloads_on_mtime_change(registry_file: Path) -> None:
 
     updated = REGISTRY_TEXT + "  new.object:\n    - Brand new thing\n"
     registry_file.write_text(updated, encoding="utf-8")
-    os.utime(registry_file, (registry_file.stat().st_atime, registry_file.stat().st_mtime + 2))
+    os.utime(
+        registry_file,
+        (registry_file.stat().st_atime, registry_file.stat().st_mtime + 2),
+    )
 
     assert registry.canonicalize_object("brand new thing") == "new.object"
 
@@ -201,9 +202,7 @@ def test_registry_hot_reloads_on_mtime_change(registry_file: Path) -> None:
 
 
 @pytest.fixture
-def registry_api_client(
-    repo: RepositoryProtocol, registry_file: Path
-) -> Any:
+def registry_api_client(repo: RepositoryProtocol, registry_file: Path) -> Any:
     from fastapi.testclient import TestClient
 
     from src.api.app import create_app

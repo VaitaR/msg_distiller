@@ -815,9 +815,7 @@ class RepositoryProtocol(Protocol):
         """
         ...
 
-    def list_object_suggestions(
-        self, status: str = "pending"
-    ) -> list[dict[str, Any]]:
+    def list_object_suggestions(self, status: str = "pending") -> list[dict[str, Any]]:
         """List object registry suggestions with the given status.
 
         Args:

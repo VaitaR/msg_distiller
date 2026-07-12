@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 from collections.abc import Generator
 from datetime import datetime
@@ -80,14 +81,10 @@ def repo(settings: Settings) -> Generator[RepositoryProtocol, None, None]:
         if settings.database_type == "sqlite":
             db_path = Path(settings.db_path)
             if db_path.exists():
-                try:
+                with contextlib.suppress(OSError):
                     db_path.unlink()
-                except OSError:
-                    pass
-            try:
+            with contextlib.suppress(OSError):
                 db_path.parent.rmdir()
-            except OSError:
-                pass
 
 
 @pytest.fixture
@@ -328,9 +325,8 @@ def postgres_test_db():
     )
 
     # Clean up: drop all tables before test
-    with repo._get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
+    with repo._get_connection() as conn, conn.cursor() as cur:
+        cur.execute("""
                 DROP TABLE IF EXISTS ingestion_state CASCADE;
                 DROP TABLE IF EXISTS channel_watermarks CASCADE;
                 DROP TABLE IF EXISTS llm_calls CASCADE;
@@ -339,7 +335,7 @@ def postgres_test_db():
                 DROP TABLE IF EXISTS raw_slack_messages CASCADE;
                 DROP TABLE IF EXISTS pipeline_tasks CASCADE;
             """)
-            conn.commit()
+        conn.commit()
 
     # Run migrations
     import subprocess
@@ -353,9 +349,8 @@ def postgres_test_db():
     yield repo
 
     # Cleanup after test
-    with repo._get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
+    with repo._get_connection() as conn, conn.cursor() as cur:
+        cur.execute("""
                 DROP TABLE IF EXISTS ingestion_state CASCADE;
                 DROP TABLE IF EXISTS channel_watermarks CASCADE;
                 DROP TABLE IF EXISTS llm_calls CASCADE;
@@ -364,7 +359,7 @@ def postgres_test_db():
                 DROP TABLE IF EXISTS raw_slack_messages CASCADE;
                 DROP TABLE IF EXISTS pipeline_tasks CASCADE;
             """)
-            conn.commit()
+        conn.commit()
 
     repo.close()
 
@@ -391,14 +386,10 @@ def seeded_db(
     try:
         yield db_path, list(SEED_EVENTS)
     finally:
-        try:
+        with contextlib.suppress(Exception):
             repo.close()
-        except Exception:
-            pass
-        try:
+        with contextlib.suppress(OSError):
             Path(db_path).unlink(missing_ok=True)
-        except OSError:
-            pass
 
 
 @pytest.fixture(scope="session")
@@ -421,11 +412,7 @@ def seeded_db_session(
     try:
         yield db_path, list(SEED_EVENTS)
     finally:
-        try:
+        with contextlib.suppress(Exception):
             repo.close()
-        except Exception:
-            pass
-        try:
+        with contextlib.suppress(OSError):
             Path(db_path).unlink(missing_ok=True)
-        except OSError:
-            pass

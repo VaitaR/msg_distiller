@@ -27,7 +27,7 @@ class StubSlackClient:
 
 
 @pytest.mark.parametrize(
-    "channels,limit",
+    ("channels", "limit"),
     [
         (
             [

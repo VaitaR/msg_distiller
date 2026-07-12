@@ -368,7 +368,7 @@ def register_callbacks(app: dash.Dash, api_base: str) -> None:
             y0=0,
             y1=1,
             yref="paper",
-            line=dict(color="red", dash="dash", width=2),
+            line={"color": "red", "dash": "dash", "width": 2},
         )
         fig.add_annotation(
             x=now_str,
@@ -376,7 +376,7 @@ def register_callbacks(app: dash.Dash, api_base: str) -> None:
             yref="paper",
             text="Today",
             showarrow=False,
-            font=dict(color="red"),
+            font={"color": "red"},
             yanchor="bottom",
         )
 

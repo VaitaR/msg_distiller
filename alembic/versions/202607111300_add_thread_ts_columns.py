@@ -17,9 +17,7 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.execute(
-        "ALTER TABLE raw_slack_messages ADD COLUMN IF NOT EXISTS thread_ts TEXT"
-    )
+    op.execute("ALTER TABLE raw_slack_messages ADD COLUMN IF NOT EXISTS thread_ts TEXT")
     op.execute("ALTER TABLE event_candidates ADD COLUMN IF NOT EXISTS thread_ts TEXT")
     op.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS thread_ts TEXT")
 

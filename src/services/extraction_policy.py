@@ -9,28 +9,58 @@ import re
 
 from src.domain.models import ActionType, Event
 
+# Heuristic thresholds for summary-quality scoring.
+_MIN_INFORMATIVE_SUMMARY_LEN = 80
+_LOW_UTILITY_SCORE_MAX = 2
+_MIN_SOURCE_TEXT_LEN_FOR_COVERAGE = 120
+_MIN_SUMMARY_COVERAGE_RATIO = 0.5
+
 _RELEASE_FACT_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\b(release|released|shipped|launched|rolled\s*out|enabled|deployed|live|available\s+now|ga|beta\s+opened|completed)\b", re.IGNORECASE),
-    re.compile(r"\b(в\s+проде|в\s+продакшене|зарелизили|выпустили|запустили|задеплоили|включили|доступно\s+сейчас|завершен|завершили)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(release|released|shipped|launched|rolled\s*out|enabled|deployed|live|available\s+now|ga|beta\s+opened|completed)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(в\s+проде|в\s+продакшене|зарелизили|выпустили|запустили|задеплоили|включили|доступно\s+сейчас|завершен|завершили)\b",
+        re.IGNORECASE,
+    ),
 )
 
 _NON_EVENT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\b(seminar|webinar|workshop|meeting)\b", re.IGNORECASE),
     re.compile(r"\b(research|investigation|exploration)\b", re.IGNORECASE),
-    re.compile(r"\b(request\s+for\s+help|can\s+someone\s+help|need\s+help|help\s+thread|support\s+thread|question\s+thread)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(request\s+for\s+help|can\s+someone\s+help|need\s+help|help\s+thread|support\s+thread|question\s+thread)\b",
+        re.IGNORECASE,
+    ),
     re.compile(r"\b(семинар|вебинар|воркшоп)\b", re.IGNORECASE),
     re.compile(r"\b(исследовани|рисерч|изучаем|расследовани)\b", re.IGNORECASE),
-    re.compile(r"\b(нужна\s+помощь|кто\s+может\s+помочь|help\s*please|вопрос\s+в\s+тред)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(нужна\s+помощь|кто\s+может\s+помочь|help\s*please|вопрос\s+в\s+тред)\b",
+        re.IGNORECASE,
+    ),
 )
 
 _T_PRODUCT_RESCUE_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\b(policy|decision|rule|gating|gate|milestone|workflow|compliance|kyc|kyt|enabled|deployed|launched|live|rolled\s*out)\b", re.IGNORECASE),
-    re.compile(r"\b(политик|решени|правил|гейт|майлстоун|воркфлоу|комплаенс|kyc|kyt|включ|задепло|запущ|в\s+проде|в\s+продакшене)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(policy|decision|rule|gating|gate|milestone|workflow|compliance|kyc|kyt|enabled|deployed|launched|live|rolled\s*out)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(политик|решени|правил|гейт|майлстоун|воркфлоу|комплаенс|kyc|kyt|включ|задепло|запущ|в\s+проде|в\s+продакшене)\b",
+        re.IGNORECASE,
+    ),
 )
 
 _T_PRODUCT_STRONG_CHANGE_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\b(delist|delisted|disable|disabled|remove|removed|roll\s?back|rollback|zero\s+fee|fee\s*[:=]\s*0)\b", re.IGNORECASE),
-    re.compile(r"\b(делист|отключ|убра(ть|ли)|обнул|откат|запрет|останов|комисси\w*\s*(0|ноль))\b", re.IGNORECASE),
+    re.compile(
+        r"\b(delist|delisted|disable|disabled|remove|removed|roll\s?back|rollback|zero\s+fee|fee\s*[:=]\s*0)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(делист|отключ|убра(ть|ли)|обнул|откат|запрет|останов|комисси\w*\s*(0|ноль))\b",
+        re.IGNORECASE,
+    ),
 )
 
 _T_PRODUCT_STRONG_CHANGE_STEMS: tuple[str, ...] = (
@@ -104,10 +134,7 @@ _ACTIONS_IMPLYING_CHANGE: tuple[ActionType, ...] = (
 def has_release_fact_evidence(text: str) -> bool:
     """Return True when text contains factual release/change wording."""
 
-    for pattern in _RELEASE_FACT_PATTERNS:
-        if pattern.search(text):
-            return True
-    return False
+    return any(pattern.search(text) for pattern in _RELEASE_FACT_PATTERNS)
 
 
 def _has_strong_change_signal(text: str) -> bool:
@@ -125,10 +152,7 @@ def is_non_event_message(text: str) -> bool:
     if _has_strong_change_signal(text):
         return False
 
-    for pattern in _NON_EVENT_PATTERNS:
-        if pattern.search(text):
-            return True
-    return False
+    return any(pattern.search(text) for pattern in _NON_EVENT_PATTERNS)
 
 
 def is_t_product_rescue_candidate(text: str) -> bool:
@@ -145,7 +169,9 @@ def is_t_product_rescue_candidate(text: str) -> bool:
     if _has_strong_change_signal(normalized):
         return True
 
-    has_keyword = any(pattern.search(normalized) for pattern in _T_PRODUCT_RESCUE_PATTERNS)
+    has_keyword = any(
+        pattern.search(normalized) for pattern in _T_PRODUCT_RESCUE_PATTERNS
+    )
     return has_keyword and (
         has_release_fact_evidence(normalized)
         or re.search(
@@ -216,7 +242,9 @@ def action_implies_change(action: ActionType) -> bool:
 def summary_contract_components(event: Event) -> tuple[bool, bool, bool]:
     """Return (has_change, has_scope, has_effect) contract components."""
 
-    has_change = summary_has_change(event.summary) or action_implies_change(event.action)
+    has_change = summary_has_change(event.summary) or action_implies_change(
+        event.action
+    )
     has_scope = bool((event.object_name_raw or "").strip())
     has_effect = summary_has_effect(event.summary, event.why_it_matters)
     return has_change, has_scope, has_effect
@@ -251,7 +279,7 @@ def is_low_utility_summary(event: Event) -> bool:
     """Heuristic low-utility summary marker."""
 
     score = 0
-    if len((event.summary or "").strip()) >= 80:
+    if len((event.summary or "").strip()) >= _MIN_INFORMATIVE_SUMMARY_LEN:
         score += 1
     if summary_has_change(event.summary):
         score += 1
@@ -259,7 +287,7 @@ def is_low_utility_summary(event: Event) -> bool:
         score += 1
     if summary_has_effect(event.summary, event.why_it_matters):
         score += 1
-    return score <= 2
+    return score <= _LOW_UTILITY_SCORE_MAX
 
 
 def is_low_coverage_summary(event: Event, raw_text: str) -> bool:
@@ -269,10 +297,10 @@ def is_low_coverage_summary(event: Event, raw_text: str) -> bool:
     text = (raw_text or "").lower()
     if not summary:
         return True
-    if len(text) < 120:
+    if len(text) < _MIN_SOURCE_TEXT_LEN_FOR_COVERAGE:
         return False
-    key_tokens = [t for t in re.findall(r"[a-zA-Zа-яА-Я0-9]{4,}", summary)[:12]]
+    key_tokens = list(re.findall(r"[a-zA-Zа-яА-Я0-9]{4,}", summary)[:12])
     if not key_tokens:
         return True
     overlap = sum(1 for token in key_tokens if token in text)
-    return overlap / len(key_tokens) < 0.5
+    return overlap / len(key_tokens) < _MIN_SUMMARY_COVERAGE_RATIO

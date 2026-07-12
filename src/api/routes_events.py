@@ -1,10 +1,12 @@
 """Event-related API routes: CRUD, timeline, review actions, audit."""
 
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from src.adapters.llm_client import LLMClient
 from src.api.dependencies import (
     get_app_settings,
     get_llm_client,
@@ -28,7 +30,6 @@ from src.api.schemas import (
     TimelineResponse,
     UnmergeRequest,
 )
-from src.adapters.llm_client import LLMClient
 from src.config.settings import Settings
 from src.domain.exceptions import LLMAPIError
 from src.domain.models import Event, ReviewLifecycleStatus
@@ -104,7 +105,11 @@ def list_events(
     """List events with optional review_status filter."""
     events = uc.get_review_queue(status=review_status, limit=limit, offset=offset)
     counts = uc.get_stats()
-    total = sum(counts.values()) if review_status is None else counts.get(review_status.value, 0)
+    total = (
+        sum(counts.values())
+        if review_status is None
+        else counts.get(review_status.value, 0)
+    )
 
     return EventListResponse(
         items=[_event_to_response(e) for e in events],
@@ -229,7 +234,7 @@ def review_event(
     _: None = Depends(require_write_access),
 ) -> dict[str, Any]:
     """Approve, reject, or publish an event."""
-    action_map = {
+    action_map: dict[str, Callable[[str, str], bool]] = {
         "approve": uc.approve_event,
         "reject": uc.reject_event,
         "publish": uc.publish_event,

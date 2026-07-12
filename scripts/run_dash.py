@@ -13,7 +13,7 @@ from pathlib import Path
 # Ensure project root is on sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.presentation.dash_app.app import create_dash_app  # noqa: E402
+from src.presentation.dash_app.app import create_dash_app
 
 
 def main() -> None:

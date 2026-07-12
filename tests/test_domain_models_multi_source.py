@@ -40,7 +40,7 @@ class TestMessageSource:
 
     def test_message_source_invalid_raises_error(self) -> None:
         """Test invalid source_id raises ValueError."""
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="invalid"):
             MessageSource("invalid")
 
 

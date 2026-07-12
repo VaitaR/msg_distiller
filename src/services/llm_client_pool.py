@@ -43,9 +43,12 @@ class LLMClientPool:
             return channel_prompt_file.strip()
 
         source_config = self._settings.get_source_config(source_id)
-        if source_config and isinstance(source_config.prompt_file, str):
-            if source_config.prompt_file.strip():
-                return source_config.prompt_file.strip()
+        if (
+            source_config
+            and isinstance(source_config.prompt_file, str)
+            and source_config.prompt_file.strip()
+        ):
+            return source_config.prompt_file.strip()
 
         return None
 

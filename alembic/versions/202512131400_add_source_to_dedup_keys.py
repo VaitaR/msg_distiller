@@ -30,7 +30,7 @@ def _normalize_anchors(value: Any) -> list[str]:
     if isinstance(value, str):
         try:
             parsed = json.loads(value)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return []
         if isinstance(parsed, list):
             return [str(item) for item in parsed if item is not None]

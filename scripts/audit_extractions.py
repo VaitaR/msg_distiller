@@ -1,6 +1,6 @@
 """Audit: compare raw messages vs extracted events to find FP/FN."""
+
 import sqlite3
-import sys
 
 conn = sqlite3.connect("data/slack_events.db")
 conn.row_factory = sqlite3.Row
@@ -36,7 +36,9 @@ for r in rows:
 
 print(f"=== Messages with events extracted: {len(has_events)} ===")
 for r in has_events:
-    print(f"  {r['ts_dt'][:16]} {r['channel'][-10:]} | {r['event_count']} events | {r['text'][:80]}")
+    print(
+        f"  {r['ts_dt'][:16]} {r['channel'][-10:]} | {r['event_count']} events | {r['text'][:80]}"
+    )
 print()
 
 print(f"=== Messages scored but LLM returned non-event: {len(scored_no_event)} ===")

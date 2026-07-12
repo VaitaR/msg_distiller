@@ -40,7 +40,9 @@ def _settings() -> MagicMock:
     return settings
 
 
-def _llm_event(*, summary: str, why_it_matters: str | None, action: str = "Launch") -> LLMEvent:
+def _llm_event(
+    *, summary: str, why_it_matters: str | None, action: str = "Launch"
+) -> LLMEvent:
     return LLMEvent(
         action=action,
         object_name_raw="Wallet Rewards",
@@ -106,7 +108,9 @@ def test_non_event_message_is_filtered_before_llm_call() -> None:
         text="Webinar announcement: join product seminar next week in support help thread"
     )
     repository = _repo(candidate)
-    llm_client = _llm_client(LLMResponse(is_event=True, events=[_llm_event(summary="x", why_it_matters="y")]))
+    llm_client = _llm_client(
+        LLMResponse(is_event=True, events=[_llm_event(summary="x", why_it_matters="y")])
+    )
 
     result = extract_events_use_case(
         llm_client=llm_client,
@@ -126,7 +130,9 @@ def test_non_event_message_is_filtered_before_llm_call() -> None:
 
 def test_planned_only_event_without_release_evidence_is_rejected() -> None:
     settings = _settings()
-    candidate = _make_candidate(text="Plan for next week: prepare rollout draft and discuss timeline")
+    candidate = _make_candidate(
+        text="Plan for next week: prepare rollout draft and discuss timeline"
+    )
     repository = _repo(candidate)
     llm_client = _llm_client(
         LLMResponse(

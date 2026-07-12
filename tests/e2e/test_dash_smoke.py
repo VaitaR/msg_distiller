@@ -14,7 +14,7 @@ import re
 from typing import Any
 
 import pytest
-from playwright.sync_api import Page, expect
+from playwright.sync_api import Page
 
 pytestmark = [
     pytest.mark.skipif(
@@ -27,9 +27,7 @@ pytestmark = [
 # DataTable row selector — Dash renders rows inside .dash-spreadsheet-inner
 _TABLE_ROWS = ".dash-spreadsheet-inner table tbody tr"
 # How long to wait for table rows to appear (JS rendering takes a moment)
-_TABLE_WAIT_JS = (
-    f"() => document.querySelectorAll('{_TABLE_ROWS}').length > 0"
-)
+_TABLE_WAIT_JS = f"() => document.querySelectorAll('{_TABLE_ROWS}').length > 0"
 # Base selector wait — generous to handle concurrent-request contention
 _SEL_WAIT = 30_000
 
@@ -62,9 +60,7 @@ class TestDashSmokeWithSeedData:
 
         # Plotly renders bars as <g class="trace bars"> inside .barlayer
         # Use a generous timeout since Plotly loads its bundle lazily
-        page.wait_for_selector(
-            ".js-plotly-plot .barlayer .trace", timeout=20_000
-        )
+        page.wait_for_selector(".js-plotly-plot .barlayer .trace", timeout=20_000)
         trace_count = page.locator(".js-plotly-plot .barlayer .trace").count()
         assert trace_count > 0, "Expected timeline chart to have bar traces"
 
@@ -91,8 +87,10 @@ class TestDashSmokeWithSeedData:
         pub_match = re.search(r"Published[:\s]+(\d+)", text)
         assert nr_match, f"'Needs Review' count not found in badges text: {text!r}"
         assert int(nr_match.group(1)) == 5
-        assert ap_match and int(ap_match.group(1)) == 3
-        assert pub_match and int(pub_match.group(1)) == 3
+        assert ap_match
+        assert int(ap_match.group(1)) == 3
+        assert pub_match
+        assert int(pub_match.group(1)) == 3
 
     # ------------------------------------------------------------------
     # Navigation
@@ -145,9 +143,9 @@ class TestDashSmokeWithSeedData:
         assert len(table_data) == 3, (
             f"Dash callback returned {len(table_data)} items, expected 3"
         )
-        assert all(
-            row.get("review_status") == "published" for row in table_data
-        ), "Not all returned rows have review_status=published"
+        assert all(row.get("review_status") == "published" for row in table_data), (
+            "Not all returned rows have review_status=published"
+        )
 
     # ------------------------------------------------------------------
     # Review actions

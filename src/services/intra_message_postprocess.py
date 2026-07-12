@@ -112,16 +112,23 @@ def enforce_primary_sub_event_policy(events: list[Event]) -> list[Event]:
     secondary = events[1]
 
     # Tight binding via shared anchor or same object+action pair.
-    primary_anchor = (primary.anchor or (primary.anchors[0] if primary.anchors else "")).strip().lower()
-    secondary_anchor = (
-        secondary.anchor or (secondary.anchors[0] if secondary.anchors else "")
-    ).strip().lower()
-    shared_anchor = bool(primary_anchor and secondary_anchor and primary_anchor == secondary_anchor)
-
-    shared_object = (
-        (primary.object_id or primary.object_name_raw).strip().lower()
-        == (secondary.object_id or secondary.object_name_raw).strip().lower()
+    primary_anchor = (
+        (primary.anchor or (primary.anchors[0] if primary.anchors else ""))
+        .strip()
+        .lower()
     )
+    secondary_anchor = (
+        (secondary.anchor or (secondary.anchors[0] if secondary.anchors else ""))
+        .strip()
+        .lower()
+    )
+    shared_anchor = bool(
+        primary_anchor and secondary_anchor and primary_anchor == secondary_anchor
+    )
+
+    shared_object = (primary.object_id or primary.object_name_raw).strip().lower() == (
+        secondary.object_id or secondary.object_name_raw
+    ).strip().lower()
     shared_action = primary.action == secondary.action
 
     if shared_anchor or (shared_object and shared_action):

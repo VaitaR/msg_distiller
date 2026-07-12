@@ -73,7 +73,14 @@ def _start_servers(
     procs: list[subprocess.Popen[bytes]] = []
 
     api_proc = subprocess.Popen(
-        ["uv", "run", "python", "scripts/run_api_server.py", "--port", str(API_TEST_PORT)],
+        [
+            "uv",
+            "run",
+            "python",
+            "scripts/run_api_server.py",
+            "--port",
+            str(API_TEST_PORT),
+        ],
         cwd=_PROJECT_ROOT,
         env=env,
         stdout=subprocess.DEVNULL,
@@ -84,8 +91,12 @@ def _start_servers(
 
     dash_proc = subprocess.Popen(
         [
-            "uv", "run", "python", "scripts/run_dash.py",
-            "--port", str(DASH_TEST_PORT),
+            "uv",
+            "run",
+            "python",
+            "scripts/run_dash.py",
+            "--port",
+            str(DASH_TEST_PORT),
         ],
         cwd=_PROJECT_ROOT,
         env={**env, "API_BASE_URL": API_TEST_URL},

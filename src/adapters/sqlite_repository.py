@@ -49,6 +49,9 @@ SLACK_STATE_TABLE: Final[str] = "slack_ingestion_state"
 LEGACY_SLACK_STATE_TABLE: Final[str] = "ingestion_state_slack"
 LEGACY_SLACK_STATE_BACKUP_TABLE: Final[str] = "ingestion_state_slack_legacy"
 
+# Max sample event IDs retained per object suggestion (matches PG jsonb cap).
+MAX_SUGGESTION_SAMPLE_IDS: Final[int] = 5
+
 
 class SQLiteRepository:
     """SQLite-based repository for MVP."""
@@ -687,7 +690,7 @@ class SQLiteRepository:
             return count
 
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to save messages: {e}")
+            raise RepositoryError(f"Failed to save messages: {e}") from e
 
     def save_telegram_messages(self, messages: list[TelegramMessage]) -> int:
         """Save Telegram messages to storage (idempotent upsert).
@@ -757,7 +760,7 @@ class SQLiteRepository:
             return count
 
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to save Telegram messages: {e}")
+            raise RepositoryError(f"Failed to save Telegram messages: {e}") from e
 
     def get_telegram_messages(
         self, channel: str, limit: int = 100
@@ -791,7 +794,7 @@ class SQLiteRepository:
             return [self._row_to_telegram_message(row) for row in rows]
 
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to get Telegram messages: {e}")
+            raise RepositoryError(f"Failed to get Telegram messages: {e}") from e
 
     def _row_to_telegram_message(self, row: sqlite3.Row) -> TelegramMessage:
         """Convert database row to TelegramMessage.
@@ -859,7 +862,7 @@ class SQLiteRepository:
             return row["committed_ts"] if row else None
 
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to get watermark: {e}")
+            raise RepositoryError(f"Failed to get watermark: {e}") from e
 
     def update_watermark(self, channel: str, ts: str) -> None:
         """Update committed watermark for channel.
@@ -915,7 +918,7 @@ class SQLiteRepository:
             return [self._row_to_message(row) for row in rows]
 
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to get new messages: {e}")
+            raise RepositoryError(f"Failed to get new messages: {e}") from e
 
     def get_new_messages_for_candidates_by_source(
         self, source_id: MessageSource
@@ -976,7 +979,7 @@ class SQLiteRepository:
         except sqlite3.Error as e:
             raise RepositoryError(
                 f"Failed to get new messages for source {source_id}: {e}"
-            )
+            ) from e
 
     def save_candidates(self, candidates: list[EventCandidate]) -> int:
         """Save event candidates (idempotent).
@@ -1028,7 +1031,7 @@ class SQLiteRepository:
             return count
 
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to save candidates: {e}")
+            raise RepositoryError(f"Failed to save candidates: {e}") from e
 
     def get_candidates_for_extraction(
         self,
@@ -1126,7 +1129,7 @@ class SQLiteRepository:
             ]
 
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to get candidates: {e}")
+            raise RepositoryError(f"Failed to get candidates: {e}") from e
 
     def get_candidate_by_message_id(self, message_id: str) -> EventCandidate | None:
         try:
@@ -1143,7 +1146,7 @@ class SQLiteRepository:
             row = cursor.fetchone()
             conn.close()
         except sqlite3.Error as exc:  # pragma: no cover - defensive path
-            raise RepositoryError(f"Failed to load candidate: {exc}")
+            raise RepositoryError(f"Failed to load candidate: {exc}") from exc
 
         if row is None:
             return None
@@ -1234,7 +1237,9 @@ class SQLiteRepository:
             conn.close()
             return [self._row_to_message(row) for row in rows]
         except sqlite3.Error as exc:  # pragma: no cover - defensive path
-            raise RepositoryError(f"Failed to load recent Slack messages: {exc}")
+            raise RepositoryError(
+                f"Failed to load recent Slack messages: {exc}"
+            ) from exc
 
     def get_recent_candidates(self, limit: int = 100) -> list[EventCandidate]:
         """Get most recent event candidates for presentation use."""
@@ -1257,7 +1262,7 @@ class SQLiteRepository:
             conn.close()
             return [self._row_to_candidate(row) for row in rows]
         except sqlite3.Error as exc:
-            raise RepositoryError(f"Failed to load recent candidates: {exc}")
+            raise RepositoryError(f"Failed to load recent candidates: {exc}") from exc
 
     def get_recent_events(self, limit: int = 100) -> list[Event]:
         """Get most recently extracted events for presentation use."""
@@ -1280,7 +1285,7 @@ class SQLiteRepository:
             conn.close()
             return [self._row_to_event(row) for row in rows]
         except sqlite3.Error as exc:
-            raise RepositoryError(f"Failed to load recent events: {exc}")
+            raise RepositoryError(f"Failed to load recent events: {exc}") from exc
 
     def update_candidate_status(self, message_id: str, status: str) -> None:
         """Update candidate processing status.
@@ -1317,7 +1322,7 @@ class SQLiteRepository:
             conn.close()
 
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to update candidate status: {e}")
+            raise RepositoryError(f"Failed to update candidate status: {e}") from e
 
     def save_events(self, events: list[Event]) -> int:
         """Save events with new comprehensive structure (upsert by dedup_key)."""
@@ -1391,7 +1396,7 @@ class SQLiteRepository:
             return [self._row_to_event(row) for row in rows]
 
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to get events: {e}")
+            raise RepositoryError(f"Failed to get events: {e}") from e
 
     def get_events_in_window_filtered(
         self,
@@ -1452,7 +1457,7 @@ class SQLiteRepository:
             return [self._row_to_event(row) for row in rows]
 
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to get filtered events: {e}")
+            raise RepositoryError(f"Failed to get filtered events: {e}") from e
 
     def query_events(self, criteria: EventQueryCriteria) -> list[Event]:
         """Query events using criteria builder.
@@ -1497,7 +1502,7 @@ class SQLiteRepository:
             return [self._row_to_event(row) for row in rows]
 
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to query events: {e}")
+            raise RepositoryError(f"Failed to query events: {e}") from e
 
     def query_candidates(
         self, criteria: CandidateQueryCriteria
@@ -1542,7 +1547,7 @@ class SQLiteRepository:
             return [self._row_to_candidate(row) for row in rows]
 
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to query candidates: {e}")
+            raise RepositoryError(f"Failed to query candidates: {e}") from e
 
     def save_llm_call(self, metadata: LLMCallMetadata) -> None:
         """Save LLM call metadata.
@@ -1578,7 +1583,7 @@ class SQLiteRepository:
             conn.close()
 
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to save LLM call: {e}")
+            raise RepositoryError(f"Failed to save LLM call: {e}") from e
 
     def get_daily_llm_cost(self, date: datetime) -> float:
         """Get total LLM cost for a day.
@@ -1608,7 +1613,7 @@ class SQLiteRepository:
             return float(row["total"]) if row and row["total"] else 0.0
 
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to get daily cost: {e}")
+            raise RepositoryError(f"Failed to get daily cost: {e}") from e
 
     def get_cached_llm_response(
         self, prompt_hash: str, *, max_age: timedelta | None = None
@@ -1679,7 +1684,7 @@ class SQLiteRepository:
             return response_json
 
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to get cached response: {e}")
+            raise RepositoryError(f"Failed to get cached response: {e}") from e
 
     def save_llm_response(self, prompt_hash: str, response_json: str) -> None:
         """Save LLM response for caching.
@@ -1717,7 +1722,7 @@ class SQLiteRepository:
             conn.close()
 
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to save LLM response: {e}")
+            raise RepositoryError(f"Failed to save LLM response: {e}") from e
 
     def invalidate_llm_cache_entry(self, prompt_hash: str) -> None:
         """Clear cached payload for a prompt hash."""
@@ -1736,7 +1741,7 @@ class SQLiteRepository:
             conn.commit()
             conn.close()
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to invalidate cached response: {e}")
+            raise RepositoryError(f"Failed to invalidate cached response: {e}") from e
 
     def _row_to_message(self, row: sqlite3.Row) -> SlackMessage:
         """Convert database row to SlackMessage."""
@@ -1961,7 +1966,7 @@ class SQLiteRepository:
             return float(row[0]) if row else None
 
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to get last processed ts: {e}")
+            raise RepositoryError(f"Failed to get last processed ts: {e}") from e
 
     def update_last_processed_ts(
         self, channel: str, ts: float, source_id: MessageSource | None = None
@@ -2018,7 +2023,7 @@ class SQLiteRepository:
             conn.close()
 
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to update last processed ts: {e}")
+            raise RepositoryError(f"Failed to update last processed ts: {e}") from e
 
     def get_last_processed_message_id(
         self, channel: str, source_id: MessageSource | None = None
@@ -2058,7 +2063,9 @@ class SQLiteRepository:
             return row[0] if row else None
 
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to get last processed message ID: {e}")
+            raise RepositoryError(
+                f"Failed to get last processed message ID: {e}"
+            ) from e
 
     def update_last_processed_message_id(
         self, channel: str, message_id: str, source_id: MessageSource | None = None
@@ -2095,7 +2102,9 @@ class SQLiteRepository:
             conn.close()
 
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to update last processed message ID: {e}")
+            raise RepositoryError(
+                f"Failed to update last processed message ID: {e}"
+            ) from e
 
     def get_candidates_by_source(
         self, source_id: MessageSource, limit: int = 100
@@ -2132,7 +2141,7 @@ class SQLiteRepository:
             return [self._row_to_candidate(row) for row in rows]
 
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to get candidates by source: {e}")
+            raise RepositoryError(f"Failed to get candidates by source: {e}") from e
 
     def get_events_by_source(
         self, source_id: MessageSource, limit: int = 100
@@ -2169,7 +2178,7 @@ class SQLiteRepository:
             return [self._row_to_event(row) for row in rows]
 
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to get events by source: {e}")
+            raise RepositoryError(f"Failed to get events by source: {e}") from e
 
     def get_related_events(self, event_id: UUID) -> list[Event]:
         """Get events related to the given event.
@@ -2202,7 +2211,7 @@ class SQLiteRepository:
             return [self._row_to_event(row) for row in rows]
 
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to get related events: {e}")
+            raise RepositoryError(f"Failed to get related events: {e}") from e
 
     def get_events_by_cluster_key(self, cluster_key: str) -> list[Event]:
         """Get all events in the same cluster (same initiative).
@@ -2235,7 +2244,7 @@ class SQLiteRepository:
             return [self._row_to_event(row) for row in rows]
 
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to get events by cluster: {e}")
+            raise RepositoryError(f"Failed to get events by cluster: {e}") from e
 
     # ------------------------------------------------------------------
     # Review lifecycle methods
@@ -2253,7 +2262,7 @@ class SQLiteRepository:
                 return None
             return self._row_to_event(row)
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to get event by id: {e}")
+            raise RepositoryError(f"Failed to get event by id: {e}") from e
 
     def get_events_for_review(
         self,
@@ -2279,7 +2288,7 @@ class SQLiteRepository:
             conn.close()
             return [self._row_to_event(row) for row in rows]
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to get events for review: {e}")
+            raise RepositoryError(f"Failed to get events for review: {e}") from e
 
     def update_event_review(
         self,
@@ -2301,7 +2310,7 @@ class SQLiteRepository:
             conn.close()
             return updated
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to update event review: {e}")
+            raise RepositoryError(f"Failed to update event review: {e}") from e
 
     def update_event_fields(
         self,
@@ -2344,7 +2353,7 @@ class SQLiteRepository:
             conn.close()
             return updated
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to update event fields: {e}")
+            raise RepositoryError(f"Failed to update event fields: {e}") from e
 
     def save_audit_entry(self, entry: EventAuditEntry) -> None:
         """Persist an audit log entry."""
@@ -2370,7 +2379,7 @@ class SQLiteRepository:
             conn.commit()
             conn.close()
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to save audit entry: {e}")
+            raise RepositoryError(f"Failed to save audit entry: {e}") from e
 
     def save_event_version(self, version: EventVersion) -> None:
         """Persist a full event snapshot."""
@@ -2393,7 +2402,7 @@ class SQLiteRepository:
             conn.commit()
             conn.close()
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to save event version: {e}")
+            raise RepositoryError(f"Failed to save event version: {e}") from e
 
     def get_audit_log(self, event_id: str) -> list[EventAuditEntry]:
         """Get audit trail for an event."""
@@ -2421,7 +2430,7 @@ class SQLiteRepository:
                 for row in rows
             ]
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to get audit log: {e}")
+            raise RepositoryError(f"Failed to get audit log: {e}") from e
 
     def get_event_versions(self, event_id: str) -> list[EventVersion]:
         """Get all version snapshots for an event."""
@@ -2446,7 +2455,7 @@ class SQLiteRepository:
                 for row in rows
             ]
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to get event versions: {e}")
+            raise RepositoryError(f"Failed to get event versions: {e}") from e
 
     def count_events_by_review_status(self) -> dict[str, int]:
         """Count events grouped by review_status."""
@@ -2460,7 +2469,10 @@ class SQLiteRepository:
             conn.close()
             return {row["rs"]: row["cnt"] for row in rows}
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to count events by review status: {e}")
+            raise RepositoryError(
+                f"Failed to count events by review status: {e}"
+            ) from e
+
     def get_event_relations(
         self,
         event_id: str,
@@ -2486,7 +2498,7 @@ class SQLiteRepository:
             conn.close()
             return [(row["relation_type"], row["target_event_id"]) for row in rows]
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to get event relations: {e}")
+            raise RepositoryError(f"Failed to get event relations: {e}") from e
 
     def delete_event_relations(
         self,
@@ -2512,7 +2524,7 @@ class SQLiteRepository:
             conn.close()
             return count
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to delete event relations: {e}")
+            raise RepositoryError(f"Failed to delete event relations: {e}") from e
 
     def save_event_relation(
         self,
@@ -2540,7 +2552,7 @@ class SQLiteRepository:
             conn.commit()
             conn.close()
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to save event relation: {e}")
+            raise RepositoryError(f"Failed to save event relation: {e}") from e
 
     def save_event_embeddings(
         self,
@@ -2572,7 +2584,7 @@ class SQLiteRepository:
             conn.commit()
             conn.close()
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to save event embeddings: {e}")
+            raise RepositoryError(f"Failed to save event embeddings: {e}") from e
 
     def get_events_missing_embedding(
         self,
@@ -2599,7 +2611,7 @@ class SQLiteRepository:
             conn.close()
             return [self._row_to_event(row) for row in rows]
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to get events missing embedding: {e}")
+            raise RepositoryError(f"Failed to get events missing embedding: {e}") from e
 
     def get_event_embeddings(
         self,
@@ -2624,7 +2636,7 @@ class SQLiteRepository:
             conn.close()
             return {row["event_id"]: json.loads(row["embedding"]) for row in rows}
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to get event embeddings: {e}")
+            raise RepositoryError(f"Failed to get event embeddings: {e}") from e
 
     def get_events_relating_to(
         self,
@@ -2651,7 +2663,7 @@ class SQLiteRepository:
             conn.close()
             return [self._row_to_event(row) for row in rows]
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to get relating events: {e}")
+            raise RepositoryError(f"Failed to get relating events: {e}") from e
 
     def list_event_clusters(
         self,
@@ -2679,7 +2691,9 @@ class SQLiteRepository:
                 params.append(object_id)
             query += " GROUP BY cluster_key"
             if since is not None:
-                query += " HAVING MAX(COALESCE(message_published_at, extracted_at)) >= ?"
+                query += (
+                    " HAVING MAX(COALESCE(message_published_at, extracted_at)) >= ?"
+                )
                 params.append(since.isoformat())
             query += " ORDER BY last_seen DESC LIMIT ?"
             params.append(limit)
@@ -2689,7 +2703,7 @@ class SQLiteRepository:
             conn.close()
             return [dict(row) for row in rows]
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to list event clusters: {e}")
+            raise RepositoryError(f"Failed to list event clusters: {e}") from e
 
     def find_similar_events(
         self,
@@ -2733,7 +2747,7 @@ class SQLiteRepository:
             scored.sort(key=lambda pair: pair[1], reverse=True)
             return scored[:limit]
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to find similar events: {e}")
+            raise RepositoryError(f"Failed to find similar events: {e}") from e
 
     def record_object_suggestion(self, name_raw: str, event_id: str) -> None:
         """Upsert an unmatched object name into the suggestions queue."""
@@ -2762,7 +2776,10 @@ class SQLiteRepository:
                 )
             else:
                 sample_ids = json.loads(row["sample_event_ids"])
-                if event_id not in sample_ids and len(sample_ids) < 5:
+                if (
+                    event_id not in sample_ids
+                    and len(sample_ids) < MAX_SUGGESTION_SAMPLE_IDS
+                ):
                     sample_ids.append(event_id)
                 cursor.execute(
                     """
@@ -2780,7 +2797,7 @@ class SQLiteRepository:
             conn.commit()
             conn.close()
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to record object suggestion: {e}")
+            raise RepositoryError(f"Failed to record object suggestion: {e}") from e
 
     def list_object_suggestions(self, status: str = "pending") -> list[dict[str, Any]]:
         """List object suggestions with the given status, most frequent first."""
@@ -2807,7 +2824,7 @@ class SQLiteRepository:
                 result.append(item)
             return result
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to list object suggestions: {e}")
+            raise RepositoryError(f"Failed to list object suggestions: {e}") from e
 
     def resolve_object_suggestion(
         self,
@@ -2837,4 +2854,4 @@ class SQLiteRepository:
             conn.close()
             return updated
         except sqlite3.Error as e:
-            raise RepositoryError(f"Failed to resolve object suggestion: {e}")
+            raise RepositoryError(f"Failed to resolve object suggestion: {e}") from e

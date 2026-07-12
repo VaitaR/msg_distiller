@@ -73,7 +73,7 @@ def review_layout() -> dbc.Container:
             # Stats badges
             html.Div(id="review-stats-badges", className="mb-3"),
             # Events table
-            dash_table.DataTable(
+            dash_table.DataTable(  # type: ignore[attr-defined]  # runtime-valid; dash stub gap
                 id="review-table",
                 columns=[
                     {"name": "Title", "id": "title", "type": "text"},

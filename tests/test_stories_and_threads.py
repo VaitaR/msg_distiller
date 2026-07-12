@@ -209,9 +209,7 @@ def test_story_detail_includes_thread_followups(repo: RepositoryProtocol) -> Non
 
 
 def test_story_detail_missing_cluster_returns_none(repo: RepositoryProtocol) -> None:
-    assert (
-        get_story_detail_use_case(repository=repo, cluster_key="nope") is None
-    )
+    assert get_story_detail_use_case(repository=repo, cluster_key="nope") is None
 
 
 def test_archived_events_excluded_from_stories(repo: RepositoryProtocol) -> None:

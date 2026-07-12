@@ -337,13 +337,13 @@ class LLMClient:
             try:
                 response_data = json.loads(content)
             except json.JSONDecodeError as e:
-                raise ValidationError(f"Invalid JSON from LLM: {e}")
+                raise ValidationError(f"Invalid JSON from LLM: {e}") from e
 
             # Validate with Pydantic
             try:
                 llm_response = LLMResponse.model_validate(response_data)
             except Exception as e:
-                raise ValidationError(f"Response validation failed: {e}")
+                raise ValidationError(f"Response validation failed: {e}") from e
 
             # Calculate cost
             tokens_in = response.usage.prompt_tokens if response.usage else 0
@@ -406,7 +406,7 @@ class LLMClient:
                 error=str(e),
                 model=self.model,
             )
-            raise LLMAPIError(f"Rate limit exceeded: {e}")
+            raise LLMAPIError(f"Rate limit exceeded: {e}") from e
         except APIError as e:
             latency_ms = int((time.time() - start_time) * 1000)
             logger.error(
@@ -415,7 +415,7 @@ class LLMClient:
                 error=str(e),
                 model=self.model,
             )
-            raise LLMAPIError(f"OpenAI API error: {e}")
+            raise LLMAPIError(f"OpenAI API error: {e}") from e
         except Exception as e:
             latency_ms = int((time.time() - start_time) * 1000)
             if isinstance(e, ValidationError | LLMAPIError):
@@ -432,7 +432,7 @@ class LLMClient:
                 error=str(e),
                 error_type=type(e).__name__,
             )
-            raise LLMAPIError(f"Unexpected error: {e}")
+            raise LLMAPIError(f"Unexpected error: {e}") from e
 
     @staticmethod
     def _is_verbose_allowed() -> bool:
@@ -576,10 +576,10 @@ class LLMClient:
             response = self.client.embeddings.create(model=model, input=texts)
         except OpenAIRateLimitError as e:
             logger.error("embedding_rate_limit_error", error=str(e), model=model)
-            raise LLMAPIError(f"Rate limit exceeded: {e}")
+            raise LLMAPIError(f"Rate limit exceeded: {e}") from e
         except APIError as e:
             logger.error("embedding_api_error", error=str(e), model=model)
-            raise LLMAPIError(f"OpenAI API error: {e}")
+            raise LLMAPIError(f"OpenAI API error: {e}") from e
 
         latency_ms = int((time.time() - start_time) * 1000)
         tokens_in = response.usage.prompt_tokens if response.usage else 0

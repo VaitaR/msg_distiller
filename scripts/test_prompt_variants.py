@@ -42,8 +42,8 @@ _HYPO_NEW = (
     '- Hypothesis, idea pitch, brainstorm, or proposal (signal words: "hypothesis",\n'
     '  "гипотеза", "concept", "idea", "what if", "концепция", "предложение к обсуждению",\n'
     '  "backlog", "brainstorm") — ALWAYS a non-event. No exception: even if dates or\n'
-    '  teams are mentioned, a message framed primarily as a hypothesis/backlog/idea is\n'
-    '  never an event.'
+    "  teams are mentioned, a message framed primarily as a hypothesis/backlog/idea is\n"
+    "  never an event."
 )
 _SIGNAL_OLD = (
     'Signal phrases that strongly indicate non-event: "гипотеза", "hypothesis",\n'
@@ -64,7 +64,9 @@ _FUTURE_GATE_OLD = (
     "at least TWO of the following:"
 )
 
-VARIANT_A = BASELINE_SYSTEM.replace(_HYPO_OLD, _HYPO_NEW).replace(_SIGNAL_OLD, _SIGNAL_NEW)
+VARIANT_A = BASELINE_SYSTEM.replace(_HYPO_OLD, _HYPO_NEW).replace(
+    _SIGNAL_OLD, _SIGNAL_NEW
+)
 assert VARIANT_A != BASELINE_SYSTEM, "Variant A patch failed"
 
 # Variant B: False-negative fix — positive trigger rules for terse release msgs
@@ -88,11 +90,10 @@ VARIANT_B = BASELINE_SYSTEM.replace(
 assert VARIANT_B != BASELINE_SYSTEM, "Variant B patch failed"
 
 # Variant C: A + B + tighter Future-Mention Gate (explicit date mandatory)
-VARIANT_C = (
-    VARIANT_A
-    .replace("Future-Mention Gate (CRITICAL):", POSITIVE_TRIGGER_BLOCK + "Future-Mention Gate (CRITICAL):")
-    .replace(_FUTURE_GATE_OLD, _FUTURE_GATE_NEW)
-)
+VARIANT_C = VARIANT_A.replace(
+    "Future-Mention Gate (CRITICAL):",
+    POSITIVE_TRIGGER_BLOCK + "Future-Mention Gate (CRITICAL):",
+).replace(_FUTURE_GATE_OLD, _FUTURE_GATE_NEW)
 assert VARIANT_C != VARIANT_A, "Variant C future-gate patch failed"
 
 VARIANTS = {
@@ -201,8 +202,11 @@ CASES = [
 
 
 # ── API call ──────────────────────────────────────────────────────────────────
-def call_llm(system: str, message: str, model: str = "gpt-4o-mini", temperature: float = 0.0) -> dict:
+def call_llm(
+    system: str, message: str, model: str = "gpt-4o-mini", temperature: float = 0.0
+) -> dict:
     from openai import OpenAI
+
     client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
     resp = client.chat.completions.create(
         model=model,
@@ -228,7 +232,7 @@ all_results: dict[str, dict[str, list[dict]]] = {}  # model_key → variant → 
 
 for model, temp in RUN_CONFIGS:
     model_key = f"{model}@t{temp}"
-    print(f"\n{'='*60}\nModel: {model_key}\n{'='*60}")
+    print(f"\n{'=' * 60}\nModel: {model_key}\n{'=' * 60}")
     results: dict[str, list[dict]] = {v: [] for v in VARIANTS}
 
     for case in CASES:
@@ -241,37 +245,43 @@ for model, temp in RUN_CONFIGS:
                 correct = is_event == case["expected_is_event"]
                 if case["expected_is_event"] and case["expected_events"] is not None:
                     correct = correct and (n == case["expected_events"])
-                results[vname].append({
-                    "label": case["label"],
-                    "expected_is_event": case["expected_is_event"],
-                    "expected_events": case["expected_events"],
-                    "got_is_event": is_event,
-                    "got_events": n,
-                    "correct": correct,
-                })
+                results[vname].append(
+                    {
+                        "label": case["label"],
+                        "expected_is_event": case["expected_is_event"],
+                        "expected_events": case["expected_events"],
+                        "got_is_event": is_event,
+                        "got_events": n,
+                        "correct": correct,
+                    }
+                )
             except Exception as e:
-                results[vname].append({
-                    "label": case["label"],
-                    "expected_is_event": case["expected_is_event"],
-                    "expected_events": case["expected_events"],
-                    "got_is_event": None,
-                    "got_events": None,
-                    "correct": False,
-                    "error": str(e),
-                })
+                results[vname].append(
+                    {
+                        "label": case["label"],
+                        "expected_is_event": case["expected_is_event"],
+                        "expected_events": case["expected_events"],
+                        "got_is_event": None,
+                        "got_events": None,
+                        "correct": False,
+                        "error": str(e),
+                    }
+                )
                 print(f"  [{vname[:10]}] {case['label'][:45]}: ERROR: {e}")
                 continue
-            print(f"  [{vname[:10]}] {case['label'][:45]}: "
-                  f"is_event={results[vname][-1]['got_is_event']} "
-                  f"n={results[vname][-1]['got_events']} "
-                  f"{'✅' if results[vname][-1]['correct'] else '❌'}")
+            print(
+                f"  [{vname[:10]}] {case['label'][:45]}: "
+                f"is_event={results[vname][-1]['got_is_event']} "
+                f"n={results[vname][-1]['got_events']} "
+                f"{'✅' if results[vname][-1]['correct'] else '❌'}"
+            )
     all_results[model_key] = results
 
 # ── Summary table ─────────────────────────────────────────────────────────────
 overall_pass: dict[str, dict[str, float]] = {}  # model_key → variant → pass_rate
 
 for model_key, results in all_results.items():
-    print(f"\n\n{'='*80}")
+    print(f"\n\n{'=' * 80}")
     print(f"RESULTS TABLE — {model_key}")
     print("=" * 80)
     print(f"{'Case':<47} {'Base':^8} {'Var A':^8} {'Var B':^8} {'Var C':^8}")
@@ -290,7 +300,7 @@ for model_key, results in all_results.items():
         correct = sum(r["correct"] for r in results[vname])
         total = len(results[vname])
         pass_rates[vname] = correct / total
-        print(f"  {vname:<40}: {correct}/{total} = {correct/total*100:.0f}%")
+        print(f"  {vname:<40}: {correct}/{total} = {correct / total * 100:.0f}%")
     overall_pass[model_key] = pass_rates
 
 # ── Final recommendation ───────────────────────────────────────────────────────
@@ -302,9 +312,11 @@ prod_key = next((k for k in overall_pass if "gpt-5.4" in k), list(overall_pass)[
 prod_rates = overall_pass[prod_key]
 best = max(prod_rates, key=prod_rates.get)
 print(f"Based on production model ({prod_key}):")
-print(f"  BEST variant: {best} ({prod_rates[best]*100:.0f}% pass rate)")
+print(f"  BEST variant: {best} ({prod_rates[best] * 100:.0f}% pass rate)")
 if prod_rates[best] > prod_rates.get("Baseline", 0):
     print("  → Apply this variant to config/prompts/slack.yaml")
 else:
-    print("  → Baseline already handles all cases; apply Variant C as defensive hardening")
+    print(
+        "  → Baseline already handles all cases; apply Variant C as defensive hardening"
+    )
 print("=" * 80)

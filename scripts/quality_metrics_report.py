@@ -25,7 +25,9 @@ from src.services.extraction_policy import (
 )
 
 
-def compute_metrics(db_path: str) -> dict[str, float | int | dict[str, dict[str, float | int]]]:
+def compute_metrics(
+    db_path: str,
+) -> dict[str, float | int | dict[str, dict[str, float | int]]]:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()

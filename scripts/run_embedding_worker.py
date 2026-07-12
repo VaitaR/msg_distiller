@@ -70,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
             model=settings.llm_model,
             timeout=settings.llm_timeout_seconds,
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception("llm_client_initialization_failed")
         return 1
 

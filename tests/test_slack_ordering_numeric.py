@@ -17,10 +17,7 @@ class OrderingSlackClient:
         self, channel_id: str, params: dict[str, Any]
     ) -> dict[str, Any]:
         limit = params.get("limit")
-        if limit is not None:
-            payload = self._messages[:limit]
-        else:
-            payload = self._messages
+        payload = self._messages[:limit] if limit is not None else self._messages
         return {
             "ok": True,
             "messages": payload,
